@@ -2,6 +2,8 @@
 
 This app exercises the locally linked `@capgo/background-geolocation` plugin before the native persistent queue is added. It is intentionally separate from SGDMS.
 
+The queue contract and lifecycle invariants are documented in [`../docs/native-track-queue-design.md`](../docs/native-track-queue-design.md).
+
 Automatic Capgo bundle updates are disabled in this harness so an installed build always exercises the locally compiled source.
 
 ## What it records
