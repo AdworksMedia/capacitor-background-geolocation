@@ -9,6 +9,8 @@
 A Capacitor plugin for accurate background location tracking and native geofencing on iOS and Android.
 Use it to stream precise location updates, monitor circular geofence regions, react to enter/exit events in JavaScript, and POST geofence transitions natively while the WebView is suspended.
 
+> **Adworks fork:** Version `8.4.5-adworks.1` adds an opt-in native SQLite track queue, with ordered read/acknowledge/reset APIs and fail-closed handling for overflow or storage errors. The current prerelease implements and validates this extension on Android; iOS support is pending. Existing Capgo behaviour is unchanged when `persistentTrack` is omitted. See [the queue design and guarantees](docs/native-track-queue-design.md).
+
 ## Features
 
 - Accurate foreground and background geolocation without a paid license.
@@ -284,6 +286,12 @@ Configuration specific to Android can be made in `strings.xml`:
 
 * [`start(...)`](#start)
 * [`stop()`](#stop)
+* [`getActivePersistentTrackSession()`](#getactivepersistenttracksession)
+* [`getPersistentTrackSession(...)`](#getpersistenttracksession)
+* [`getPersistentTrackSessions()`](#getpersistenttracksessions)
+* [`getPersistentTrackPoints(...)`](#getpersistenttrackpoints)
+* [`acknowledgePersistentTrackPoints(...)`](#acknowledgepersistenttrackpoints)
+* [`resetPersistentTrackSession(...)`](#resetpersistenttracksession)
 * [`updateHeaders(...)`](#updateheaders)
 * [`openSettings()`](#opensettings)
 * [`setPlannedRoute(...)`](#setplannedroute)
@@ -337,6 +345,113 @@ stop() => Promise<void>
 Stops location updates.
 
 **Since:** 7.0.9
+
+--------------------
+
+
+### getActivePersistentTrackSession()
+
+```typescript
+getActivePersistentTrackSession() => Promise<PersistentTrackSessionResult>
+```
+
+Returns the active persistent session, if one exists.
+
+**Returns:** <code>Promise&lt;<a href="#persistenttracksessionresult">PersistentTrackSessionResult</a>&gt;</code>
+
+**Since:** 8.4.5-adworks.1
+
+--------------------
+
+
+### getPersistentTrackSession(...)
+
+```typescript
+getPersistentTrackSession(options: GetPersistentTrackSessionOptions) => Promise<PersistentTrackSessionResult>
+```
+
+Returns one persistent session without modifying its queue.
+
+| Param         | Type                                                                                          |
+| ------------- | --------------------------------------------------------------------------------------------- |
+| **`options`** | <code><a href="#getpersistenttracksessionoptions">GetPersistentTrackSessionOptions</a></code> |
+
+**Returns:** <code>Promise&lt;<a href="#persistenttracksessionresult">PersistentTrackSessionResult</a>&gt;</code>
+
+**Since:** 8.4.5-adworks.1
+
+--------------------
+
+
+### getPersistentTrackSessions()
+
+```typescript
+getPersistentTrackSessions() => Promise<PersistentTrackSessionsResult>
+```
+
+Lists persistent sessions, newest first.
+
+**Returns:** <code>Promise&lt;<a href="#persistenttracksessionsresult">PersistentTrackSessionsResult</a>&gt;</code>
+
+**Since:** 8.4.5-adworks.1
+
+--------------------
+
+
+### getPersistentTrackPoints(...)
+
+```typescript
+getPersistentTrackPoints(options: GetPersistentTrackPointsOptions) => Promise<PersistentTrackPointsResult>
+```
+
+Reads a stable, ordered page without removing points.
+
+| Param         | Type                                                                                        |
+| ------------- | ------------------------------------------------------------------------------------------- |
+| **`options`** | <code><a href="#getpersistenttrackpointsoptions">GetPersistentTrackPointsOptions</a></code> |
+
+**Returns:** <code>Promise&lt;<a href="#persistenttrackpointsresult">PersistentTrackPointsResult</a>&gt;</code>
+
+**Since:** 8.4.5-adworks.1
+
+--------------------
+
+
+### acknowledgePersistentTrackPoints(...)
+
+```typescript
+acknowledgePersistentTrackPoints(options: AcknowledgePersistentTrackPointsOptions) => Promise<AcknowledgePersistentTrackPointsResult>
+```
+
+Deletes queued points through an inclusive sequence after the host has
+committed them to its own durable storage.
+
+| Param         | Type                                                                                                        |
+| ------------- | ----------------------------------------------------------------------------------------------------------- |
+| **`options`** | <code><a href="#acknowledgepersistenttrackpointsoptions">AcknowledgePersistentTrackPointsOptions</a></code> |
+
+**Returns:** <code>Promise&lt;<a href="#acknowledgepersistenttrackpointsresult">AcknowledgePersistentTrackPointsResult</a>&gt;</code>
+
+**Since:** 8.4.5-adworks.1
+
+--------------------
+
+
+### resetPersistentTrackSession(...)
+
+```typescript
+resetPersistentTrackSession(options: ResetPersistentTrackSessionOptions) => Promise<ResetPersistentTrackSessionResult>
+```
+
+Stops the named session when active, then deletes its metadata and points.
+
+| Param         | Type                                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------------- |
+| **`options`** | <code><a href="#resetpersistenttracksessionoptions">ResetPersistentTrackSessionOptions</a></code> |
+
+**Returns:** <code>Promise&lt;<a href="#resetpersistenttracksessionresult">ResetPersistentTrackSessionResult</a>&gt;</code>
+
+**Since:** 8.4.5-adworks.1
 
 --------------------
 
@@ -581,17 +696,28 @@ Get the native Capacitor plugin version
 
 The options for configuring for location updates.
 
-| Prop                     | Type                                                            | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Default                            | Since |
-| ------------------------ | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- | ----- |
-| **`backgroundMessage`**  | <code>string</code>                                             | If the "backgroundMessage" option is defined, the plugin will provide location updates whether the app is in the background or the foreground. If it is not defined, location updates are only guaranteed in the foreground. This is true on both platforms. On Android, a notification must be shown to continue receiving location updates in the background. This option specifies the text of that notification.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |                                    | 7.0.9 |
-| **`backgroundTitle`**    | <code>string</code>                                             | The title of the notification mentioned above.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | <code>"Using your location"</code> | 7.0.9 |
-| **`requestPermissions`** | <code>boolean</code>                                            | Whether permissions should be requested from the user automatically, if they are not already granted.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | <code>true</code>                  | 7.0.9 |
-| **`stale`**              | <code>boolean</code>                                            | If "true", stale locations may be delivered while the device obtains a GPS fix. You are responsible for checking the "time" property. If "false", locations are guaranteed to be up to date.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | <code>false</code>                 | 7.0.9 |
-| **`distanceFilter`**     | <code>number</code>                                             | The distance in meters that the device must move before a new location update is triggered. This is used to filter out small movements and reduce the number of updates. A non-zero value suppresses updates while the device is stationary (for example a parked vehicle). Use {@link <a href="#startoptions">StartOptions.minIntervalMs</a>} when you need a lower update rate but still want periodic points without movement.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | <code>0</code>                     | 7.0.9 |
-| **`url`**                | <code>string</code>                                             | When set, each location update is additionally delivered by POSTing it as JSON to this URL directly from native code, in parallel with the JavaScript callback. The request body matches the <a href="#location">`Location`</a> object, plus an extra `"source": "native"` field so the server can tell native POSTs apart from updates forwarded by the JavaScript layer. Native delivery does not depend on the WebView. On Android, the foreground service is kept alive and restarted by the system (`START_STICKY`), so location POSTs continue even after the user swipes the app away from the recents list and its process is killed. On iOS, locations are POSTed natively for as long as the system keeps the app running; iOS itself stops location updates when the user terminates the app (an OS restriction — iOS has no equivalent of Android's restartable foreground service). Delivery is best-effort: there is no on-disk queue and no automatic retry. Failed POSTs are logged and dropped. A flaky network can delay in-flight requests, but points are not persisted across process death. |                                    | 8.2.0 |
-| **`headers`**            | <code><a href="#record">Record</a>&lt;string, string&gt;</code> | Extra HTTP headers for the native POST described by {@link <a href="#startoptions">StartOptions.url</a>}. Ignored when `url` is not set. On Android these headers are persisted next to `url` so a sticky service restart can keep authenticating. Prefer a narrowly scoped, long-lived token for this path, or call {@link BackgroundGeolocationPlugin.updateHeaders} when credentials rotate. On iOS location headers stay in memory for the tracking session.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |                                    | 8.3.3 |
-| **`minIntervalMs`**      | <code>number</code>                                             | Minimum interval between native location POSTs, in milliseconds. `0` or unset keeps the current behaviour (every provider update). Applied as the Android `requestLocationUpdates` interval (advisory) and as a hard gate immediately before each native POST on both platforms. A point older than the last one sent still passes through (late update, not a faster one). Note: a non-zero {@link <a href="#startoptions">StartOptions.distanceFilter</a>} suppresses updates while the device is stationary, so it cannot substitute for a time interval when you still need periodic parked-vehicle heartbeats.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | <code>0</code>                     | 8.3.3 |
-| **`networkFallback`**    | <code>boolean</code>                                            | Android only - has no effect on iOS. Whether to fall back to `NETWORK_PROVIDER` (cell/Wi-Fi based location) when `GPS_PROVIDER` has not delivered a fix recently. GPS can go quiet for extended periods when the app is backgrounded, the screen is locked, or the device has weak sky visibility (indoors, dense urban areas); the network fallback fills those gaps with a coarser, but far more reliably delivered, fix. GPS always takes priority: a network fix is only used once GPS has been silent for 20+ seconds, and is dropped if its reported accuracy is worse than 300m or unreported. Defaults to `false`, so existing GPS-only accuracy characteristics are unchanged unless you opt in.                                                                                                                                                                                                                                                                                                                                                                                                         | <code>false</code>                 | 8.5.0 |
+| Prop                     | Type                                                                      | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Default                            | Since           |
+| ------------------------ | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- | --------------- |
+| **`backgroundMessage`**  | <code>string</code>                                                       | If the "backgroundMessage" option is defined, the plugin will provide location updates whether the app is in the background or the foreground. If it is not defined, location updates are only guaranteed in the foreground. This is true on both platforms. On Android, a notification must be shown to continue receiving location updates in the background. This option specifies the text of that notification.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |                                    | 7.0.9           |
+| **`backgroundTitle`**    | <code>string</code>                                                       | The title of the notification mentioned above.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | <code>"Using your location"</code> | 7.0.9           |
+| **`requestPermissions`** | <code>boolean</code>                                                      | Whether permissions should be requested from the user automatically, if they are not already granted.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | <code>true</code>                  | 7.0.9           |
+| **`stale`**              | <code>boolean</code>                                                      | If "true", stale locations may be delivered while the device obtains a GPS fix. You are responsible for checking the "time" property. If "false", locations are guaranteed to be up to date.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | <code>false</code>                 | 7.0.9           |
+| **`distanceFilter`**     | <code>number</code>                                                       | The distance in meters that the device must move before a new location update is triggered. This is used to filter out small movements and reduce the number of updates. A non-zero value suppresses updates while the device is stationary (for example a parked vehicle). Use {@link <a href="#startoptions">StartOptions.minIntervalMs</a>} when you need a lower update rate but still want periodic points without movement.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | <code>0</code>                     | 7.0.9           |
+| **`url`**                | <code>string</code>                                                       | When set, each location update is additionally delivered by POSTing it as JSON to this URL directly from native code, in parallel with the JavaScript callback. The request body matches the <a href="#location">`Location`</a> object, plus an extra `"source": "native"` field so the server can tell native POSTs apart from updates forwarded by the JavaScript layer. Native delivery does not depend on the WebView. On Android, the foreground service is kept alive and restarted by the system (`START_STICKY`), so location POSTs continue even after the user swipes the app away from the recents list and its process is killed. On iOS, locations are POSTed natively for as long as the system keeps the app running; iOS itself stops location updates when the user terminates the app (an OS restriction — iOS has no equivalent of Android's restartable foreground service). Delivery is best-effort: there is no on-disk queue and no automatic retry. Failed POSTs are logged and dropped. A flaky network can delay in-flight requests, but points are not persisted across process death. |                                    | 8.2.0           |
+| **`headers`**            | <code><a href="#record">Record</a>&lt;string, string&gt;</code>           | Extra HTTP headers for the native POST described by {@link <a href="#startoptions">StartOptions.url</a>}. Ignored when `url` is not set. On Android these headers are persisted next to `url` so a sticky service restart can keep authenticating. Prefer a narrowly scoped, long-lived token for this path, or call {@link BackgroundGeolocationPlugin.updateHeaders} when credentials rotate. On iOS location headers stay in memory for the tracking session.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |                                    | 8.3.3           |
+| **`minIntervalMs`**      | <code>number</code>                                                       | Minimum interval between native location POSTs, in milliseconds. `0` or unset keeps the current behaviour (every provider update). Applied as the Android `requestLocationUpdates` interval (advisory) and as a hard gate immediately before each native POST on both platforms. A point older than the last one sent still passes through (late update, not a faster one). Note: a non-zero {@link <a href="#startoptions">StartOptions.distanceFilter</a>} suppresses updates while the device is stationary, so it cannot substitute for a time interval when you still need periodic parked-vehicle heartbeats.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | <code>0</code>                     | 8.3.3           |
+| **`networkFallback`**    | <code>boolean</code>                                                      | Android only - has no effect on iOS. Whether to fall back to `NETWORK_PROVIDER` (cell/Wi-Fi based location) when `GPS_PROVIDER` has not delivered a fix recently. GPS can go quiet for extended periods when the app is backgrounded, the screen is locked, or the device has weak sky visibility (indoors, dense urban areas); the network fallback fills those gaps with a coarser, but far more reliably delivered, fix. GPS always takes priority: a network fix is only used once GPS has been silent for 20+ seconds, and is dropped if its reported accuracy is worse than 300m or unreported. Defaults to `false`, so existing GPS-only accuracy characteristics are unchanged unless you opt in.                                                                                                                                                                                                                                                                                                                                                                                                         | <code>false</code>                 | 8.5.0           |
+| **`persistentTrack`**    | <code><a href="#persistenttrackoptions">PersistentTrackOptions</a></code> | Enables native SQLite persistence for this tracking session. A point is committed before it is emitted to JavaScript or submitted to {@link <a href="#startoptions">StartOptions.url</a>}. The 8.4.5-adworks.1 prerelease implements this mode on Android; iOS support is pending. Web runtimes are unsupported.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |                                    | 8.4.5-adworks.1 |
+
+
+#### PersistentTrackOptions
+
+Enables the native, SQLite-backed point queue for one tracking session.
+
+| Prop            | Type                | Description                                                                                                                                                         | Default             | Since           |
+| --------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | --------------- |
+| **`sessionId`** | <code>string</code> | Opaque session identifier supplied by the host application. A UUID is recommended. The value must contain at most 128 ASCII letters, digits, `.`, `_`, `:`, or `-`. |                     | 8.4.5-adworks.1 |
+| **`maxPoints`** | <code>number</code> | Maximum number of unacknowledged points retained for this session. Tracking fails closed instead of evicting old points when this limit is reached.                 | <code>100000</code> | 8.4.5-adworks.1 |
 
 
 #### Location
@@ -620,6 +746,106 @@ Extends the standard Error with optional error codes.
 | Prop       | Type                | Description                                           | Since |
 | ---------- | ------------------- | ----------------------------------------------------- | ----- |
 | **`code`** | <code>string</code> | Optional error code for more specific error handling. | 7.0.0 |
+
+
+#### PersistentTrackSessionResult
+
+| Prop          | Type                                                                              |
+| ------------- | --------------------------------------------------------------------------------- |
+| **`session`** | <code><a href="#persistenttracksession">PersistentTrackSession</a> \| null</code> |
+
+
+#### PersistentTrackSession
+
+Native persistent track session metadata and queue diagnostics.
+
+| Prop                      | Type                                                                                |
+| ------------------------- | ----------------------------------------------------------------------------------- |
+| **`sessionId`**           | <code>string</code>                                                                 |
+| **`state`**               | <code><a href="#persistenttracksessionstate">PersistentTrackSessionState</a></code> |
+| **`startedAt`**           | <code>number</code>                                                                 |
+| **`stoppedAt`**           | <code>number \| null</code>                                                         |
+| **`lastSequence`**        | <code>number</code>                                                                 |
+| **`acknowledgedThrough`** | <code>number</code>                                                                 |
+| **`queuedPointCount`**    | <code>number</code>                                                                 |
+| **`maxPoints`**           | <code>number</code>                                                                 |
+| **`lastPersistedAt`**     | <code>number \| null</code>                                                         |
+| **`droppedPointCount`**   | <code>number</code>                                                                 |
+| **`errorCode`**           | <code>string \| null</code>                                                         |
+| **`errorMessage`**        | <code>string \| null</code>                                                         |
+
+
+#### GetPersistentTrackSessionOptions
+
+| Prop            | Type                |
+| --------------- | ------------------- |
+| **`sessionId`** | <code>string</code> |
+
+
+#### PersistentTrackSessionsResult
+
+| Prop           | Type                                  |
+| -------------- | ------------------------------------- |
+| **`sessions`** | <code>PersistentTrackSession[]</code> |
+
+
+#### PersistentTrackPointsResult
+
+| Prop                    | Type                                |
+| ----------------------- | ----------------------------------- |
+| **`points`**            | <code>PersistentTrackPoint[]</code> |
+| **`nextAfterSequence`** | <code>number \| null</code>         |
+| **`hasMore`**           | <code>boolean</code>                |
+
+
+#### PersistentTrackPoint
+
+A location committed to the native persistent queue.
+
+| Prop              | Type                |
+| ----------------- | ------------------- |
+| **`sessionId`**   | <code>string</code> |
+| **`sequence`**    | <code>number</code> |
+| **`persistedAt`** | <code>number</code> |
+
+
+#### GetPersistentTrackPointsOptions
+
+| Prop                | Type                | Default                                           |
+| ------------------- | ------------------- | ------------------------------------------------- |
+| **`sessionId`**     | <code>string</code> |                                                   |
+| **`afterSequence`** | <code>number</code> | <code>The session's acknowledged boundary.</code> |
+| **`limit`**         | <code>number</code> | <code>1000</code>                                 |
+
+
+#### AcknowledgePersistentTrackPointsResult
+
+| Prop                      | Type                |
+| ------------------------- | ------------------- |
+| **`deletedPointCount`**   | <code>number</code> |
+| **`acknowledgedThrough`** | <code>number</code> |
+
+
+#### AcknowledgePersistentTrackPointsOptions
+
+| Prop                  | Type                |
+| --------------------- | ------------------- |
+| **`sessionId`**       | <code>string</code> |
+| **`throughSequence`** | <code>number</code> |
+
+
+#### ResetPersistentTrackSessionResult
+
+| Prop                    | Type                |
+| ----------------------- | ------------------- |
+| **`deletedPointCount`** | <code>number</code> |
+
+
+#### ResetPersistentTrackSessionOptions
+
+| Prop            | Type                |
+| --------------- | ------------------- |
+| **`sessionId`** | <code>string</code> |
 
 
 #### UpdateHeadersOptions
@@ -762,6 +988,13 @@ Options for {@link BackgroundGeolocationPlugin.requestPermissions}.
 Construct a type with a set of properties K of type T
 
 <code>{ [P in K]: T; }</code>
+
+
+#### PersistentTrackSessionState
+
+Lifecycle state of a native persistent track session.
+
+<code>'active' | 'stopped' | 'overflowed' | 'failed'</code>
 
 
 #### PermissionState

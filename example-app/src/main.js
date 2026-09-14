@@ -11,6 +11,9 @@ const defaultConfig = {
   minIntervalMs: 5000,
   networkFallback: true,
   nativeUrl: '',
+  persistentTrack: true,
+  sessionId: createSessionId(),
+  maxPoints: 100000,
 };
 
 const state = {
@@ -23,6 +26,8 @@ const state = {
   lastGapMs: null,
   lastLocation: null,
   permissions: null,
+  nativeSession: null,
+  queuePage: null,
   events: readStoredJson(EVENTS_STORAGE_KEY, []),
   config: { ...defaultConfig, ...readStoredJson(CONFIG_STORAGE_KEY, {}) },
 };
@@ -32,7 +37,7 @@ document.querySelector('#app').innerHTML = `
     <div>
       <p class="eyebrow">Capgo plugin test harness</p>
       <h1>Background Geolocation</h1>
-      <p class="lead">Observe the current plugin before adding a native persistent queue.</p>
+      <p class="lead">Exercise background delivery and the native persistent track queue.</p>
     </div>
     <span id="platform-badge" class="badge"></span>
   </header>
@@ -51,7 +56,7 @@ document.querySelector('#app').innerHTML = `
       <div><dt>Provider time</dt><dd id="provider-time">—</dd></div>
     </dl>
     <pre id="last-location" class="location-output">No location received in this app process.</pre>
-    <p class="hint">“Harness state” is local UI state, not native <code>isRunning</code>; the plugin does not expose that API yet.</p>
+    <p class="hint">Callback counters are process-local. Persistent queue state is queried independently from native storage.</p>
   </section>
 
   <section class="panel" aria-labelledby="config-heading">
@@ -69,12 +74,47 @@ document.querySelector('#app').innerHTML = `
         <input id="network-fallback" type="checkbox" />
         <span>Use Android network fallback when GPS is silent</span>
       </label>
+      <label class="checkbox-field">
+        <input id="persistent-track" type="checkbox" />
+        <span>Persist track points in the native SQLite queue</span>
+      </label>
+      <label>
+        <span>Persistent session ID</span>
+        <input id="session-id" type="text" maxlength="128" autocomplete="off" />
+      </label>
+      <label>
+        <span>Maximum queued points</span>
+        <input id="max-points" type="number" min="2" max="1000000" step="1" inputmode="numeric" />
+      </label>
       <label class="wide-field">
         <span>Native delivery URL (optional)</span>
         <input id="native-url" type="url" inputmode="url" autocomplete="off" placeholder="https://your-test-endpoint.example/locations" />
         <small>Leave empty for the normal callback test. Setting a URL enables Capgo’s distinct native POST/sticky-service path.</small>
       </label>
     </div>
+  </section>
+
+  <section class="panel" aria-labelledby="queue-heading">
+    <div class="section-heading">
+      <h2 id="queue-heading">Native persistent queue</h2>
+      <span id="queue-badge" class="badge badge-muted">Unknown</span>
+    </div>
+    <dl class="metrics queue-metrics">
+      <div><dt>Last sequence</dt><dd id="queue-last-sequence">—</dd></div>
+      <div><dt>Acknowledged through</dt><dd id="queue-acknowledged">—</dd></div>
+      <div><dt>Queued points</dt><dd id="queue-count">—</dd></div>
+      <div><dt>Last persisted</dt><dd id="queue-last-persisted">—</dd></div>
+    </dl>
+    <div class="button-grid">
+      <button id="refresh-queue" class="secondary">Refresh queue</button>
+      <button id="read-queue" class="secondary">Read selected session</button>
+      <button id="reconnect-callback" class="secondary" disabled>Reconnect JS callback</button>
+      <button id="ack-queue" class="secondary" disabled>Acknowledge displayed page</button>
+      <button id="reset-queue" class="danger">Reset selected session</button>
+      <button id="new-session" class="secondary">Generate new session ID</button>
+    </div>
+    <pre id="queue-output" class="location-output">Native queue state has not been queried.</pre>
+    <p class="hint">The four values above refresh automatically while this page is visible. Read is non-destructive. Acknowledge deletes only the displayed points after a host has durably imported them.</p>
   </section>
 
   <section class="panel" aria-labelledby="actions-heading">
@@ -120,9 +160,20 @@ const elements = {
   minInterval: document.getElementById('min-interval'),
   networkFallback: document.getElementById('network-fallback'),
   nativeUrl: document.getElementById('native-url'),
+  persistentTrack: document.getElementById('persistent-track'),
+  sessionId: document.getElementById('session-id'),
+  maxPoints: document.getElementById('max-points'),
   startForeground: document.getElementById('start-foreground'),
   startBackground: document.getElementById('start-background'),
   stop: document.getElementById('stop'),
+  queueBadge: document.getElementById('queue-badge'),
+  queueLastSequence: document.getElementById('queue-last-sequence'),
+  queueAcknowledged: document.getElementById('queue-acknowledged'),
+  queueCount: document.getElementById('queue-count'),
+  queueLastPersisted: document.getElementById('queue-last-persisted'),
+  queueOutput: document.getElementById('queue-output'),
+  reconnectCallback: document.getElementById('reconnect-callback'),
+  acknowledgeQueue: document.getElementById('ack-queue'),
   timeline: document.getElementById('timeline'),
 };
 
@@ -131,6 +182,9 @@ elements.distanceFilter.value = String(state.config.distanceFilter);
 elements.minInterval.value = String(state.config.minIntervalMs);
 elements.networkFallback.checked = Boolean(state.config.networkFallback);
 elements.nativeUrl.value = state.config.nativeUrl;
+elements.persistentTrack.checked = Boolean(state.config.persistentTrack);
+elements.sessionId.value = state.config.sessionId;
+elements.maxPoints.value = String(state.config.maxPoints);
 
 document.getElementById('check-permissions').addEventListener('click', checkPermissions);
 document.getElementById('request-permissions').addEventListener('click', requestPermissions);
@@ -138,6 +192,12 @@ document.getElementById('open-settings').addEventListener('click', runAction('op
 elements.startForeground.addEventListener('click', () => startTracking('foreground'));
 elements.startBackground.addEventListener('click', () => startTracking('background'));
 elements.stop.addEventListener('click', stopTracking);
+document.getElementById('refresh-queue').addEventListener('click', refreshNativeQueue);
+document.getElementById('read-queue').addEventListener('click', readSelectedQueue);
+elements.reconnectCallback.addEventListener('click', () => startTracking('background'));
+elements.acknowledgeQueue.addEventListener('click', acknowledgeDisplayedQueue);
+document.getElementById('reset-queue').addEventListener('click', resetSelectedQueue);
+document.getElementById('new-session').addEventListener('click', generateNewSession);
 document.getElementById('copy-report').addEventListener('click', copyReport);
 document.getElementById('clear-timeline').addEventListener('click', clearTimeline);
 
@@ -150,7 +210,13 @@ window.addEventListener('pagehide', (event) => addEvent('lifecycle', `Page hidde
 
 addEvent('lifecycle', 'Harness booted; native tracking state is unknown until this process starts a run');
 render();
+void refreshNativeQueue();
 window.setInterval(renderStatus, 1000);
+window.setInterval(() => {
+  if (Capacitor.isNativePlatform() && document.visibilityState === 'visible' && state.nativeSession?.state === 'active') {
+    void refreshNativeQueue(true);
+  }
+}, 5000);
 
 async function checkPermissions() {
   await performAction('check permissions', async () => {
@@ -201,6 +267,12 @@ async function startTracking(mode) {
   if (config.nativeUrl) {
     options.url = config.nativeUrl;
   }
+  if (config.persistentTrack) {
+    options.persistentTrack = {
+      sessionId: config.sessionId,
+      maxPoints: config.maxPoints,
+    };
+  }
 
   addEvent('action', `Starting ${mode} run with ${JSON.stringify(options)}`);
   try {
@@ -214,6 +286,7 @@ async function startTracking(mode) {
     state.lastGapMs = null;
     state.lastLocation = null;
     addEvent('action', `${capitalize(mode)} run registered`);
+    await loadQueueState(config.sessionId, false);
   } catch (error) {
     state.errorCount += 1;
     const normalized = normalizeError(error);
@@ -228,6 +301,10 @@ function handleLocationCallback(location, error) {
     state.errorCount += 1;
     const normalized = normalizeError(error);
     addEvent('error', `Location callback error: ${normalized.message}`, { error: normalized });
+    state.active = false;
+    state.mode = 'inactive';
+    state.startedAt = null;
+    void loadQueueState(state.config.sessionId, false).finally(renderStatus);
   }
   if (location) {
     state.callbackCount += 1;
@@ -251,8 +328,129 @@ async function stopTracking() {
     state.active = false;
     state.mode = 'inactive';
     state.startedAt = null;
+    await loadQueueState(state.config.sessionId, false);
     renderStatus();
   });
+}
+
+async function refreshNativeQueue(silent = false) {
+  if (!Capacitor.isNativePlatform()) {
+    state.nativeSession = null;
+    state.queuePage = null;
+    renderQueue();
+    return;
+  }
+  await performAction('refresh native queue', async () => {
+    const activeResult = await BackgroundGeolocation.getActivePersistentTrackSession();
+    if (activeResult.session) {
+      state.nativeSession = activeResult.session;
+      elements.sessionId.value = activeResult.session.sessionId;
+      state.config.sessionId = activeResult.session.sessionId;
+      localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(state.config));
+      if (!state.active) {
+        state.mode = 'recovered-native';
+      }
+    } else {
+      await loadQueueState(elements.sessionId.value.trim(), false);
+    }
+    if (!silent) {
+      addEvent(
+        'queue',
+        activeResult.session
+          ? `Active native session recovered: ${activeResult.session.sessionId}`
+          : 'No active native persistent session',
+      );
+    }
+    renderStatus();
+  });
+}
+
+async function readSelectedQueue() {
+  await performAction('read native queue', async () => {
+    const sessionId = selectedSessionId();
+    await loadQueueState(sessionId, true);
+  });
+}
+
+async function loadQueueState(sessionId, logResult) {
+  if (!sessionId) {
+    state.nativeSession = null;
+    state.queuePage = null;
+    renderQueue();
+    return;
+  }
+  const [sessionResult, page] = await Promise.all([
+    BackgroundGeolocation.getPersistentTrackSession({ sessionId }),
+    BackgroundGeolocation.getPersistentTrackPoints({ sessionId, limit: 1000 }).catch((error) => {
+      if (normalizeError(error).code === 'SESSION_NOT_FOUND') {
+        return null;
+      }
+      throw error;
+    }),
+  ]);
+  state.nativeSession = sessionResult.session;
+  state.queuePage = page;
+  if (logResult) {
+    addEvent(
+      'queue',
+      sessionResult.session
+        ? `Read ${page?.points.length ?? 0} queued points from ${sessionId}`
+        : `Persistent session ${sessionId} was not found`,
+    );
+  }
+  renderQueue();
+}
+
+async function acknowledgeDisplayedQueue() {
+  await performAction('acknowledge native queue', async () => {
+    const throughSequence = state.queuePage?.nextAfterSequence;
+    if (throughSequence === null || throughSequence === undefined) {
+      throw new Error('Read a non-empty queue page before acknowledging it');
+    }
+    const sessionId = selectedSessionId();
+    const result = await BackgroundGeolocation.acknowledgePersistentTrackPoints({ sessionId, throughSequence });
+    addEvent(
+      'queue',
+      `Acknowledged through #${result.acknowledgedThrough}; deleted ${result.deletedPointCount} points`,
+    );
+    await loadQueueState(sessionId, false);
+  });
+}
+
+async function resetSelectedQueue() {
+  await performAction('reset native queue', async () => {
+    const sessionId = selectedSessionId();
+    const result = await BackgroundGeolocation.resetPersistentTrackSession({ sessionId });
+    addEvent('queue', `Reset ${sessionId}; deleted ${result.deletedPointCount} points`);
+    state.active = false;
+    state.mode = 'inactive';
+    state.startedAt = null;
+    state.nativeSession = null;
+    state.queuePage = null;
+    generateNewSession(false);
+    renderStatus();
+  });
+}
+
+function generateNewSession(logResult = true) {
+  const sessionId = createSessionId();
+  elements.sessionId.value = sessionId;
+  state.config.sessionId = sessionId;
+  localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(state.config));
+  state.nativeSession = null;
+  state.queuePage = null;
+  if (logResult) {
+    addEvent('action', `Generated session ID ${sessionId}`);
+  }
+  renderQueue();
+}
+
+function selectedSessionId() {
+  const sessionId = elements.sessionId.value.trim();
+  if (!sessionId) {
+    throw new Error('Persistent session ID is required');
+  }
+  return sessionId;
 }
 
 function runAction(label, action) {
@@ -285,9 +483,20 @@ function readConfig() {
     minIntervalMs,
     networkFallback: elements.networkFallback.checked,
     nativeUrl,
+    persistentTrack: elements.persistentTrack.checked,
+    sessionId: selectedSessionId(),
+    maxPoints: parseIntegerInRange(elements.maxPoints.value, 'Maximum queued points', 2, 1000000),
   };
   localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(state.config));
   return state.config;
+}
+
+function parseIntegerInRange(rawValue, label, minimum, maximum) {
+  const value = Number(rawValue);
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${label} must be an integer between ${minimum} and ${maximum}`);
+  }
+  return value;
 }
 
 function parseNonNegativeNumber(rawValue, label) {
@@ -334,6 +543,8 @@ async function copyReport() {
       },
       config: state.config,
       permissions: state.permissions,
+      nativeSession: state.nativeSession,
+      queuePage: state.queuePage,
       events: state.events,
     },
     null,
@@ -354,6 +565,7 @@ function render() {
   renderVisibility();
   renderStatus();
   renderTimeline();
+  renderQueue();
 }
 
 function renderVisibility() {
@@ -362,8 +574,13 @@ function renderVisibility() {
 }
 
 function renderStatus() {
-  elements.trackingStatus.textContent = state.active ? `Active (${state.mode})` : 'Inactive / unknown natively';
-  elements.trackingStatus.dataset.active = String(state.active);
+  const nativeActive = state.nativeSession?.state === 'active';
+  elements.trackingStatus.textContent = state.active
+    ? `Active (${state.mode})`
+    : nativeActive
+      ? 'Active (recovered native session)'
+      : 'Inactive';
+  elements.trackingStatus.dataset.active = String(state.active || nativeActive);
   elements.runDuration.textContent = state.startedAt === null ? '—' : formatDuration(Date.now() - state.startedAt);
   elements.callbackCount.textContent = String(state.callbackCount);
   elements.errorCount.textContent = String(state.errorCount);
@@ -389,9 +606,36 @@ function renderStatus() {
   elements.permissionStatus.textContent = state.permissions
     ? `Permissions: ${JSON.stringify(state.permissions)}`
     : 'Permissions have not been checked in this app process.';
-  elements.startForeground.disabled = state.active;
-  elements.startBackground.disabled = state.active;
-  elements.stop.disabled = !state.active;
+  elements.startForeground.disabled = state.active || nativeActive;
+  elements.startBackground.disabled = state.active || nativeActive;
+  elements.stop.disabled = !state.active && !nativeActive;
+  renderQueue();
+}
+
+function renderQueue() {
+  const session = state.nativeSession;
+  const page = state.queuePage;
+  elements.queueBadge.textContent = session?.state ?? 'Not found';
+  elements.queueBadge.dataset.state = session?.state ?? 'missing';
+  elements.queueLastSequence.textContent = session ? String(session.lastSequence) : '—';
+  elements.queueAcknowledged.textContent = session ? String(session.acknowledgedThrough) : '—';
+  elements.queueCount.textContent = session ? String(session.queuedPointCount) : '—';
+  elements.queueLastPersisted.textContent = session?.lastPersistedAt ? formatTimestamp(session.lastPersistedAt) : '—';
+  elements.queueOutput.textContent = session
+    ? JSON.stringify(
+        {
+          displayedPointCount: page?.points.length ?? null,
+          firstDisplayedSequence: page?.points[0]?.sequence ?? null,
+          lastDisplayedSequence: page?.nextAfterSequence ?? null,
+          hasMore: page?.hasMore ?? null,
+          latestDisplayedPoints: page?.points.slice(-10).reverse() ?? [],
+        },
+        null,
+        2,
+      )
+    : 'No native persistent session loaded for the selected ID.';
+  elements.acknowledgeQueue.disabled = !page?.points.length;
+  elements.reconnectCallback.disabled = state.active || session?.state !== 'active';
 }
 
 function renderTimeline() {
@@ -420,6 +664,13 @@ function readStoredJson(key, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function createSessionId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+  return `track-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function normalizeError(error) {

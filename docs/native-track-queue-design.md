@@ -6,6 +6,8 @@ This document fixes the cross-platform contract for the opt-in persistent track 
 
 Existing `start()` consumers remain unchanged. Native persistence is enabled only when `persistentTrack` is present in `StartOptions`.
 
+The `8.4.5-adworks.1` prerelease contains the Android implementation. The shared TypeScript contract is intentionally cross-platform, but the matching iOS implementation and device validation remain required before this fork can claim cross-platform production readiness.
+
 The queue owns a private SQLite database inside the host application's sandbox. It never opens the host application's primary database.
 
 ## Invariants
@@ -193,6 +195,7 @@ CREATE TABLE persistent_track_sessions (
   stopped_at INTEGER,
   last_sequence INTEGER NOT NULL DEFAULT 0,
   acknowledged_through INTEGER NOT NULL DEFAULT 0,
+  queued_point_count INTEGER NOT NULL DEFAULT 0,
   max_points INTEGER NOT NULL,
   last_persisted_at INTEGER,
   dropped_point_count INTEGER NOT NULL DEFAULT 0,
@@ -222,7 +225,7 @@ CREATE TABLE persistent_track_points (
 );
 ```
 
-Each point insert and the corresponding `last_sequence` / `last_persisted_at` update occur in one transaction. Queue counts are queried from `persistent_track_points` rather than maintained as a second mutable counter.
+Each point insert and the corresponding `last_sequence`, `last_persisted_at`, and `queued_point_count` update occur in one transaction. Acknowledgement deletes points and decrements `queued_point_count` in that same transaction, keeping session status reads constant-time without weakening the queue invariant.
 
 The database file is private to the plugin inside the host application's sandbox. Foreign keys are enabled. Android uses `SQLiteOpenHelper`; iOS uses the system `SQLite3` library. Neither platform adds a third-party database dependency.
 
@@ -245,6 +248,8 @@ A SQLite open/write/commit failure follows the same fail-closed path with state 
 
 Persistent-track mode keeps the foreground service alive independently of the WebView, just as native URL mode currently does. The session ID and location configuration needed for a sticky restart are stored natively. A system-created `START_STICKY` service restores the active session and continues writing before any WebView exists.
 
+The initial service start occurs before the JavaScript options reach the bound service and is therefore non-sticky. After the restart configuration is committed synchronously, Android receives a second start command so the configured run is explicitly armed as `START_STICKY` before `start()` succeeds.
+
 Swipe from Recents is therefore expected to preserve an active persistent session. Android force-stop is an explicit operating-system stop and cannot be bypassed. On the next manual launch, the active session remains discoverable and can be resumed by calling `start()` with the same ID.
 
 ### iOS
@@ -257,9 +262,9 @@ An explicit user force-quit normally prevents iOS from relaunching location trac
 
 Persistent-track mode is native-only. The web implementation rejects `start({ persistentTrack: ... })` and all persistent queue methods with Capacitor's unimplemented error. It does not emulate durability with `localStorage` or IndexedDB because that would provide different lifecycle guarantees.
 
-## Validation gates
+## Cross-platform production validation gates
 
-Before the fork is tagged:
+Before the fork receives a cross-platform production tag:
 
 1. schema creation and migration tests pass on Android and iOS;
 2. insert order, nullable fields, pagination, acknowledgement, reset, and session discovery have native tests;

@@ -175,6 +175,17 @@ h2 {
   background: #ffedd5;
 }
 
+#queue-badge[data-state="active"] {
+  color: #fff;
+  background: #08783e;
+}
+
+#queue-badge[data-state="overflowed"],
+#queue-badge[data-state="failed"] {
+  color: #fff;
+  background: #b3261e;
+}
+
 .metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -206,6 +217,10 @@ h2 {
 
 .metrics dd[data-active="true"] {
   color: #08783e;
+}
+
+.queue-metrics dd {
+  font-variant-numeric: tabular-nums;
 }
 
 .location-output {
@@ -240,7 +255,8 @@ h2 {
 }
 
 .form-grid input[type="number"],
-.form-grid input[type="url"] {
+.form-grid input[type="url"],
+.form-grid input[type="text"] {
   width: 100%;
   min-height: 44px;
   padding: 0.65rem 0.75rem;

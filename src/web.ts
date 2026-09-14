@@ -13,6 +13,11 @@ import type {
   GeofenceTransitionEvent,
   BackgroundGeolocationPermissionStatus,
   UpdateHeadersOptions,
+  PersistentTrackSessionResult,
+  PersistentTrackSessionsResult,
+  PersistentTrackPointsResult,
+  AcknowledgePersistentTrackPointsResult,
+  ResetPersistentTrackSessionResult,
 } from './definitions';
 
 interface WebGeofence {
@@ -43,6 +48,9 @@ export class BackgroundGeolocationWeb extends WebPlugin implements BackgroundGeo
   private notifyOnExit = true;
 
   async start(options: StartOptions, callback: (position?: Location, error?: CallbackError) => void): Promise<void> {
+    if (options.persistentTrack) {
+      throw this.unimplemented('Persistent track storage is only available on Android and iOS');
+    }
     if (!navigator.geolocation) {
       callback(undefined, {
         name: 'GeolocationError',
@@ -106,6 +114,30 @@ export class BackgroundGeolocationWeb extends WebPlugin implements BackgroundGeo
       navigator.geolocation.clearWatch(this.watchId);
       delete this.watchId;
     }
+  }
+
+  async getActivePersistentTrackSession(): Promise<PersistentTrackSessionResult> {
+    throw this.unimplemented('Persistent track storage is only available on Android and iOS');
+  }
+
+  async getPersistentTrackSession(): Promise<PersistentTrackSessionResult> {
+    throw this.unimplemented('Persistent track storage is only available on Android and iOS');
+  }
+
+  async getPersistentTrackSessions(): Promise<PersistentTrackSessionsResult> {
+    throw this.unimplemented('Persistent track storage is only available on Android and iOS');
+  }
+
+  async getPersistentTrackPoints(): Promise<PersistentTrackPointsResult> {
+    throw this.unimplemented('Persistent track storage is only available on Android and iOS');
+  }
+
+  async acknowledgePersistentTrackPoints(): Promise<AcknowledgePersistentTrackPointsResult> {
+    throw this.unimplemented('Persistent track storage is only available on Android and iOS');
+  }
+
+  async resetPersistentTrackSession(): Promise<ResetPersistentTrackSessionResult> {
+    throw this.unimplemented('Persistent track storage is only available on Android and iOS');
   }
 
   async openSettings(): Promise<void> {

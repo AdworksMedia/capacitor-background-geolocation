@@ -19,6 +19,8 @@ final class LocalEvents {
     interface Listener {
         default void onLocation(String callbackId, Location location) {}
 
+        default void onLocationError(String callbackId, String code, String message) {}
+
         default void onGeofenceTransition(String payload) {}
 
         default void onGeofenceError(String payload) {}
@@ -39,6 +41,10 @@ final class LocalEvents {
 
     static void emitLocation(String callbackId, Location location) {
         dispatch((listener) -> listener.onLocation(callbackId, location));
+    }
+
+    static void emitLocationError(String callbackId, String code, String message) {
+        dispatch((listener) -> listener.onLocationError(callbackId, code, message));
     }
 
     static void emitGeofenceTransition(String payload) {

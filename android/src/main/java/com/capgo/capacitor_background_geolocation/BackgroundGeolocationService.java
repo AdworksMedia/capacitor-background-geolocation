@@ -37,6 +37,7 @@ public class BackgroundGeolocationService extends Service {
 
     static final String NOTIFICATION_CHANNEL_ID = BackgroundGeolocationService.class.getPackage().getName();
     private final IBinder binder = new LocalBinder();
+    private final Object persistenceBoundaryLock = new Object();
 
     private static final double EARTH_RADIUS_M = 6371000;
 
@@ -79,6 +80,15 @@ public class BackgroundGeolocationService extends Service {
     // destroyed. Delivery runs on postExecutor to keep it off the main thread.
     private String nativePostUrl;
     private ExecutorService postExecutor;
+    private PersistentTrackStore persistentTrackStore;
+    private String persistentSessionId;
+    private boolean acceptingLocations;
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        persistentTrackStore = PersistentTrackStore.getInstance(getApplicationContext());
+    }
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -90,9 +100,8 @@ public class BackgroundGeolocationService extends Service {
     // that the application has been killed, all watchers are stopped and the
     // service is terminated immediately.
     //
-    // The exception is native delivery mode (a "url" was given to start()): there
-    // the service is meant to outlive the app UI, so it keeps running and relies
-    // on onStartCommand to re-establish updates if the process is later restarted.
+    // Native delivery and persistent-track modes are meant to outlive the app UI,
+    // so they keep running and rely on onStartCommand to restore location updates.
     @Override
     public boolean onUnbind(Intent intent) {
         if (LocationStore.isEnabled(getApplicationContext())) {
@@ -108,8 +117,8 @@ public class BackgroundGeolocationService extends Service {
         return false;
     }
 
-    // In native delivery mode, keep tracking after the user swipes the app away
-    // from the recents list; otherwise fall back to the default teardown.
+    // In native delivery or persistent-track mode, keep tracking after the user
+    // swipes the app away from the recents list.
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         if (LocationStore.isEnabled(getApplicationContext())) {
@@ -119,18 +128,33 @@ public class BackgroundGeolocationService extends Service {
     }
 
     // The system may kill and later restart a START_STICKY foreground service
-    // with a null intent and no binder call. When native delivery is configured,
-    // re-establish location updates from the persisted config so tracking resumes
-    // without the app UI.
+    // with a null intent and no binder call. Restore location updates from the
+    // persisted config so tracking resumes without the app UI.
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         Context context = getApplicationContext();
         if (!LocationStore.isEnabled(context)) {
-            // Not in native delivery mode: preserve the original behavior where the
-            // service does not outlive the app, so it is not sticky-restarted.
+            // Preserve the original behavior for ordinary callback-only tracking.
             return START_NOT_STICKY;
         }
         nativePostUrl = LocationStore.getUrl(context);
+        persistentSessionId = LocationStore.getPersistentSessionId(context);
+        if (persistentSessionId != null) {
+            try {
+                PersistentTrackStore.Session active = persistentTrackStore.getActiveSession();
+                if (active == null || !persistentSessionId.equals(active.sessionId)) {
+                    Logger.error("Persistent track config does not match the active session");
+                    LocationStore.clear(context);
+                    stopSelf();
+                    return START_NOT_STICKY;
+                }
+            } catch (PersistentTrackStore.StoreException exception) {
+                Logger.error("Could not restore persistent track session", exception);
+                LocationStore.clear(context);
+                stopSelf();
+                return START_NOT_STICKY;
+            }
+        }
         promoteToForeground(LocationStore.getTitle(context), LocationStore.getMessage(context));
         if (client == null || locationCallback == null) {
             acquireWakeLock();
@@ -140,6 +164,9 @@ public class BackgroundGeolocationService extends Service {
             networkFallbackEnabled = LocationStore.getNetworkFallback(context);
             locationCallback = createLocationListener(this);
             lastGpsFixAtMs = SystemClock.elapsedRealtime();
+            synchronized (persistenceBoundaryLock) {
+                acceptingLocations = true;
+            }
             requestLocationUpdates();
             startWatchdog();
         }
@@ -148,6 +175,9 @@ public class BackgroundGeolocationService extends Service {
 
     @Override
     public void onDestroy() {
+        synchronized (persistenceBoundaryLock) {
+            acceptingLocations = false;
+        }
         if (client != null && locationCallback != null) {
             client.removeUpdates(locationCallback);
         }
@@ -256,6 +286,51 @@ public class BackgroundGeolocationService extends Service {
                 return;
             }
         }
+
+        String persistenceErrorCode = null;
+        String persistenceErrorMessage = null;
+        synchronized (persistenceBoundaryLock) {
+            if (!acceptingLocations) {
+                return;
+            }
+            if (persistentSessionId != null) {
+                try {
+                    PersistentTrackStore.AppendResult result = persistentTrackStore.appendLocation(
+                        persistentSessionId,
+                        location,
+                        System.currentTimeMillis()
+                    );
+                    if (result.overflowed) {
+                        persistenceErrorCode = "QUEUE_FULL";
+                        persistenceErrorMessage = "Persistent track queue reached its configured point limit";
+                        acceptingLocations = false;
+                    }
+                } catch (PersistentTrackStore.StoreException exception) {
+                    if ("INVALID_LOCATION".equals(exception.code)) {
+                        LocalEvents.emitLocationError(callbackId, exception.code, exception.getMessage());
+                        return;
+                    }
+                    persistenceErrorCode = exception.code;
+                    persistenceErrorMessage = exception.getMessage();
+                    acceptingLocations = false;
+                    try {
+                        persistentTrackStore.failSession(
+                            persistentSessionId,
+                            exception.code,
+                            exception.getMessage(),
+                            System.currentTimeMillis()
+                        );
+                    } catch (PersistentTrackStore.StoreException failureException) {
+                        Logger.error("Could not mark persistent track session as failed", failureException);
+                    }
+                }
+            }
+        }
+        if (persistenceErrorCode != null) {
+            terminateAfterPersistentFailure(persistenceErrorCode, persistenceErrorMessage);
+            return;
+        }
+
         startWatchdog();
         if (nativePostUrl != null) {
             postLocationNatively(location);
@@ -269,6 +344,28 @@ public class BackgroundGeolocationService extends Service {
             isOffRoute = offRoute;
         }
         LocalEvents.emitLocation(callbackId, location);
+    }
+
+    private void terminateAfterPersistentFailure(String code, String message) {
+        Logger.error("Persistent track stopped: " + code + " - " + message);
+        LocationStore.clear(getApplicationContext());
+        nativePostUrl = null;
+        persistentSessionId = null;
+        stopWatchdog();
+        removeLocationUpdates();
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE);
+        stopSelf();
+        releaseMediaPlayer();
+        releaseWakeLock();
+        LocalEvents.emitLocationError(callbackId, code, message);
+    }
+
+    private void removeLocationUpdates() {
+        if (client == null || locationCallback == null) {
+            return;
+        }
+        client.removeUpdates(locationCallback);
+        locationCallback = null;
     }
 
     // Delivers a location to the configured URL from native code, so it works
@@ -388,8 +485,66 @@ public class BackgroundGeolocationService extends Service {
             final String url,
             final Map<String, String> headers,
             final long minIntervalMs,
-            final boolean networkFallback
-        ) {
+            final boolean networkFallback,
+            final String requestedPersistentSessionId,
+            final int persistentMaxPoints
+        ) throws PersistentTrackStore.StoreException {
+            PersistentTrackStore.Session activeSession = persistentTrackStore.getActiveSession();
+            if (requestedPersistentSessionId == null && activeSession != null) {
+                throw new PersistentTrackStore.StoreException(
+                    "ACTIVE_SESSION_EXISTS",
+                    "Another persistent track session is already active"
+                );
+            }
+            if (requestedPersistentSessionId != null) {
+                persistentTrackStore.startSession(requestedPersistentSessionId, persistentMaxPoints, System.currentTimeMillis());
+            }
+
+            nativePostUrl = (url == null || url.isEmpty()) ? null : url;
+            if (
+                !LocationStore.saveSetup(
+                    getApplicationContext(),
+                    nativePostUrl,
+                    notificationTitle,
+                    notificationMessage,
+                    distanceFilter,
+                    headers,
+                    Math.max(0L, minIntervalMs),
+                    networkFallback,
+                    requestedPersistentSessionId,
+                    persistentMaxPoints
+                )
+            ) {
+                if (requestedPersistentSessionId != null) {
+                    persistentTrackStore.failSession(
+                        requestedPersistentSessionId,
+                        "PERSISTENCE_ERROR",
+                        "Could not persist sticky restart configuration",
+                        System.currentTimeMillis()
+                    );
+                }
+                throw new PersistentTrackStore.StoreException("PERSISTENCE_ERROR", "Could not persist sticky restart configuration");
+            }
+            try {
+                // The first startForegroundService call happens before the
+                // binder can persist this setup, so that onStartCommand call
+                // is intentionally non-sticky. Start once more after commit
+                // so Android records START_STICKY for this configured run.
+                getApplicationContext().startService(new Intent(getApplicationContext(), BackgroundGeolocationService.class));
+            } catch (RuntimeException exception) {
+                LocationStore.clear(getApplicationContext());
+                nativePostUrl = null;
+                if (requestedPersistentSessionId != null) {
+                    persistentTrackStore.failSession(
+                        requestedPersistentSessionId,
+                        "PERSISTENCE_ERROR",
+                        "Could not arm sticky service restart",
+                        System.currentTimeMillis()
+                    );
+                }
+                throw new PersistentTrackStore.StoreException("PERSISTENCE_ERROR", "Could not arm sticky service restart", exception);
+            }
+
             releaseMediaPlayer();
             acquireWakeLock();
             client = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
@@ -398,18 +553,7 @@ public class BackgroundGeolocationService extends Service {
             currentDistanceFilter = distanceFilter;
             currentMinIntervalMs = Math.max(0L, minIntervalMs);
             networkFallbackEnabled = networkFallback;
-
-            nativePostUrl = (url == null || url.isEmpty()) ? null : url;
-            LocationStore.saveSetup(
-                getApplicationContext(),
-                nativePostUrl,
-                notificationTitle,
-                notificationMessage,
-                distanceFilter,
-                headers,
-                currentMinIntervalMs,
-                networkFallback
-            );
+            persistentSessionId = requestedPersistentSessionId;
 
             // The service may already be running (for example after a sticky
             // restart), so drop any previous listener before registering a new one.
@@ -417,6 +561,9 @@ public class BackgroundGeolocationService extends Service {
                 client.removeUpdates(locationCallback);
             }
             locationCallback = createLocationListener(BackgroundGeolocationService.this);
+            synchronized (persistenceBoundaryLock) {
+                acceptingLocations = true;
+            }
             requestLocationUpdates();
             // Arm the watchdog here so rejected network fixes during the grace period cannot
             // leave tracking without a restart path if GPS_PROVIDER goes silent.
@@ -428,15 +575,41 @@ public class BackgroundGeolocationService extends Service {
             LocationStore.saveHeaders(getApplicationContext(), headers);
         }
 
-        String stop() {
-            LocationStore.clear(getApplicationContext());
+        String stop() throws PersistentTrackStore.StoreException {
+            PersistentTrackStore.StoreException stopFailure = null;
+            synchronized (persistenceBoundaryLock) {
+                acceptingLocations = false;
+                try {
+                    String sessionToStop = persistentSessionId;
+                    if (sessionToStop == null) {
+                        PersistentTrackStore.Session active = persistentTrackStore.getActiveSession();
+                        sessionToStop = active == null ? null : active.sessionId;
+                    }
+                    if (sessionToStop != null) {
+                        persistentTrackStore.stopSession(sessionToStop, System.currentTimeMillis());
+                    }
+                } catch (PersistentTrackStore.StoreException exception) {
+                    stopFailure = exception;
+                }
+            }
+            boolean setupCleared = LocationStore.clear(getApplicationContext());
             nativePostUrl = null;
+            persistentSessionId = null;
             stopWatchdog();
-            client.removeUpdates(locationCallback);
+            removeLocationUpdates();
             ServiceCompat.stopForeground(BackgroundGeolocationService.this, ServiceCompat.STOP_FOREGROUND_REMOVE);
             stopSelf();
             releaseMediaPlayer();
             releaseWakeLock();
+            if (stopFailure != null) {
+                throw stopFailure;
+            }
+            if (!setupCleared) {
+                throw new PersistentTrackStore.StoreException(
+                    "PERSISTENCE_ERROR",
+                    "Tracking stopped, but sticky restart configuration could not be cleared"
+                );
+            }
             return callbackId;
         }
 

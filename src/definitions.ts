@@ -59,6 +59,31 @@ export interface RequestBackgroundGeolocationPermissionsOptions {
 }
 
 /**
+ * Enables the native, SQLite-backed point queue for one tracking session.
+ *
+ * @since 8.4.5-adworks.1
+ */
+export interface PersistentTrackOptions {
+  /**
+   * Opaque session identifier supplied by the host application. A UUID is recommended.
+   *
+   * The value must contain at most 128 ASCII letters, digits, `.`, `_`, `:`, or `-`.
+   *
+   * @since 8.4.5-adworks.1
+   * @example "550e8400-e29b-41d4-a716-446655440000"
+   */
+  sessionId: string;
+  /**
+   * Maximum number of unacknowledged points retained for this session.
+   * Tracking fails closed instead of evicting old points when this limit is reached.
+   *
+   * @since 8.4.5-adworks.1
+   * @default 100000
+   */
+  maxPoints?: number;
+}
+
+/**
  * The options for configuring for location updates.
  *
  * @since 7.0.9
@@ -210,6 +235,16 @@ export interface StartOptions {
    * networkFallback: true
    */
   networkFallback?: boolean;
+  /**
+   * Enables native SQLite persistence for this tracking session.
+   *
+   * A point is committed before it is emitted to JavaScript or submitted to
+   * {@link StartOptions.url}. The 8.4.5-adworks.1 prerelease implements this
+   * mode on Android; iOS support is pending. Web runtimes are unsupported.
+   *
+   * @since 8.4.5-adworks.1
+   */
+  persistentTrack?: PersistentTrackOptions;
 }
 
 /**
@@ -288,6 +323,88 @@ export interface Location {
    * @example 1640995200000
    */
   time: number | null;
+}
+
+/**
+ * Lifecycle state of a native persistent track session.
+ *
+ * @since 8.4.5-adworks.1
+ */
+export type PersistentTrackSessionState = 'active' | 'stopped' | 'overflowed' | 'failed';
+
+/**
+ * Native persistent track session metadata and queue diagnostics.
+ *
+ * @since 8.4.5-adworks.1
+ */
+export interface PersistentTrackSession {
+  sessionId: string;
+  state: PersistentTrackSessionState;
+  startedAt: number;
+  stoppedAt: number | null;
+  lastSequence: number;
+  acknowledgedThrough: number;
+  queuedPointCount: number;
+  maxPoints: number;
+  lastPersistedAt: number | null;
+  droppedPointCount: number;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+/**
+ * A location committed to the native persistent queue.
+ *
+ * @since 8.4.5-adworks.1
+ */
+export interface PersistentTrackPoint extends Location {
+  sessionId: string;
+  sequence: number;
+  persistedAt: number;
+}
+
+export interface GetPersistentTrackSessionOptions {
+  sessionId: string;
+}
+
+export interface PersistentTrackSessionResult {
+  session: PersistentTrackSession | null;
+}
+
+export interface PersistentTrackSessionsResult {
+  sessions: PersistentTrackSession[];
+}
+
+export interface GetPersistentTrackPointsOptions {
+  sessionId: string;
+  /** @default The session's acknowledged boundary. */
+  afterSequence?: number;
+  /** @default 1000 */
+  limit?: number;
+}
+
+export interface PersistentTrackPointsResult {
+  points: PersistentTrackPoint[];
+  nextAfterSequence: number | null;
+  hasMore: boolean;
+}
+
+export interface AcknowledgePersistentTrackPointsOptions {
+  sessionId: string;
+  throughSequence: number;
+}
+
+export interface AcknowledgePersistentTrackPointsResult {
+  deletedPointCount: number;
+  acknowledgedThrough: number;
+}
+
+export interface ResetPersistentTrackSessionOptions {
+  sessionId: string;
+}
+
+export interface ResetPersistentTrackSessionResult {
+  deletedPointCount: number;
 }
 
 /**
@@ -691,6 +808,51 @@ export interface BackgroundGeolocationPlugin {
    * await BackgroundGeolocation.stop();
    */
   stop(): Promise<void>;
+
+  /**
+   * Returns the active persistent session, if one exists.
+   *
+   * @since 8.4.5-adworks.1
+   */
+  getActivePersistentTrackSession(): Promise<PersistentTrackSessionResult>;
+
+  /**
+   * Returns one persistent session without modifying its queue.
+   *
+   * @since 8.4.5-adworks.1
+   */
+  getPersistentTrackSession(options: GetPersistentTrackSessionOptions): Promise<PersistentTrackSessionResult>;
+
+  /**
+   * Lists persistent sessions, newest first.
+   *
+   * @since 8.4.5-adworks.1
+   */
+  getPersistentTrackSessions(): Promise<PersistentTrackSessionsResult>;
+
+  /**
+   * Reads a stable, ordered page without removing points.
+   *
+   * @since 8.4.5-adworks.1
+   */
+  getPersistentTrackPoints(options: GetPersistentTrackPointsOptions): Promise<PersistentTrackPointsResult>;
+
+  /**
+   * Deletes queued points through an inclusive sequence after the host has
+   * committed them to its own durable storage.
+   *
+   * @since 8.4.5-adworks.1
+   */
+  acknowledgePersistentTrackPoints(
+    options: AcknowledgePersistentTrackPointsOptions,
+  ): Promise<AcknowledgePersistentTrackPointsResult>;
+
+  /**
+   * Stops the named session when active, then deletes its metadata and points.
+   *
+   * @since 8.4.5-adworks.1
+   */
+  resetPersistentTrackSession(options: ResetPersistentTrackSessionOptions): Promise<ResetPersistentTrackSessionResult>;
 
   /**
    * Replaces HTTP headers used by native POSTs without restarting tracking.

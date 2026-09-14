@@ -31,6 +31,8 @@ final class LocationStore {
     private static final String KEY_MIN_INTERVAL_MS = "minIntervalMs";
     private static final String KEY_NETWORK_FALLBACK = "networkFallback";
     private static final String KEY_LAST_POST_TIME = "lastPostTime";
+    private static final String KEY_PERSISTENT_SESSION_ID = "persistentSessionId";
+    private static final String KEY_PERSISTENT_MAX_POINTS = "persistentMaxPoints";
 
     private LocationStore() {}
 
@@ -39,7 +41,7 @@ final class LocationStore {
     }
 
     // Persists the watcher config. A null or empty url disables native delivery.
-    static void saveSetup(
+    static boolean saveSetup(
         Context context,
         String url,
         String title,
@@ -47,15 +49,18 @@ final class LocationStore {
         float distanceFilter,
         Map<String, String> headers,
         long minIntervalMs,
-        boolean networkFallback
+        boolean networkFallback,
+        String persistentSessionId,
+        int persistentMaxPoints
     ) {
         SharedPreferences.Editor editor = prefs(context).edit();
-        if (url == null || url.isEmpty()) {
+        boolean nativePostEnabled = url != null && !url.isEmpty();
+        boolean persistentTrackEnabled = persistentSessionId != null && !persistentSessionId.isEmpty();
+        if (!nativePostEnabled && !persistentTrackEnabled) {
             editor.clear();
         } else {
             editor
                 .putBoolean(KEY_ENABLED, true)
-                .putString(KEY_URL, url)
                 .putString(KEY_TITLE, title)
                 .putString(KEY_MESSAGE, message)
                 .putFloat(KEY_DISTANCE_FILTER, distanceFilter)
@@ -63,21 +68,36 @@ final class LocationStore {
                 .putLong(KEY_MIN_INTERVAL_MS, Math.max(0L, minIntervalMs))
                 .putBoolean(KEY_NETWORK_FALLBACK, networkFallback)
                 .remove(KEY_LAST_POST_TIME);
+            if (nativePostEnabled) {
+                editor.putString(KEY_URL, url);
+            } else {
+                editor.remove(KEY_URL);
+            }
+            if (persistentTrackEnabled) {
+                editor.putString(KEY_PERSISTENT_SESSION_ID, persistentSessionId).putInt(KEY_PERSISTENT_MAX_POINTS, persistentMaxPoints);
+            } else {
+                editor.remove(KEY_PERSISTENT_SESSION_ID).remove(KEY_PERSISTENT_MAX_POINTS);
+            }
         }
-        editor.apply();
+        // A persistent/native run must not be reported as started before its
+        // sticky-restart configuration is durably stored.
+        return editor.commit();
     }
 
     static void saveHeaders(Context context, Map<String, String> headers) {
         prefs(context).edit().putString(KEY_HEADERS, headersToJson(headers)).apply();
     }
 
-    static void clear(Context context) {
-        prefs(context).edit().clear().apply();
+    static boolean clear(Context context) {
+        return prefs(context).edit().clear().commit();
     }
 
     static boolean isEnabled(Context context) {
         SharedPreferences prefs = prefs(context);
-        return prefs.getBoolean(KEY_ENABLED, false) && prefs.getString(KEY_URL, null) != null;
+        return (
+            prefs.getBoolean(KEY_ENABLED, false) &&
+            (prefs.getString(KEY_URL, null) != null || prefs.getString(KEY_PERSISTENT_SESSION_ID, null) != null)
+        );
     }
 
     static String getUrl(Context context) {
@@ -102,6 +122,14 @@ final class LocationStore {
 
     static boolean getNetworkFallback(Context context) {
         return prefs(context).getBoolean(KEY_NETWORK_FALLBACK, false);
+    }
+
+    static String getPersistentSessionId(Context context) {
+        return prefs(context).getString(KEY_PERSISTENT_SESSION_ID, null);
+    }
+
+    static int getPersistentMaxPoints(Context context) {
+        return prefs(context).getInt(KEY_PERSISTENT_MAX_POINTS, PersistentTrackStore.DEFAULT_MAX_POINTS);
     }
 
     static Map<String, String> getHeaders(Context context) {
