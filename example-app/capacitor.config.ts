@@ -6,14 +6,17 @@ const config: CapacitorConfig = {
   appId: 'com.capgo.backgroundgeolocation.example',
   appName: '@capgo/background-geolocation',
   webDir: 'dist',
+  android: {
+    useLegacyBridge: true,
+  },
   plugins: {
     SplashScreen: {
-      launchAutoHide: false,
+      launchAutoHide: true,
     },
     CapacitorUpdater: {
       appId: 'com.capgo.backgroundgeolocation.example',
-      autoUpdate: true,
-      autoSplashscreen: true,
+      autoUpdate: false,
+      autoSplashscreen: false,
       directUpdate: 'always',
       version: pkg.version,
     },
