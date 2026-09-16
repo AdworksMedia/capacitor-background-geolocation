@@ -9,11 +9,42 @@
 A Capacitor plugin for accurate background location tracking and native geofencing on iOS and Android.
 Use it to stream precise location updates, monitor circular geofence regions, react to enter/exit events in JavaScript, and POST geofence transitions natively while the WebView is suspended.
 
-> **Adworks fork:** Version `8.4.5-adworks.2` adds the iOS implementation of the opt-in native SQLite track queue introduced on Android in `8.4.5-adworks.1`, with ordered read/acknowledge/reset APIs and fail-closed handling for overflow or storage errors. Existing Capgo behaviour is unchanged when `persistentTrack` is omitted. See [the queue design and guarantees](docs/native-track-queue-design.md).
+## Adworks fork status
+
+This fork is based on Capgo `8.4.5` and adds an opt-in, native SQLite track queue for applications that cannot depend on the Capacitor WebView being alive when a location is received.
+
+| Item | Status |
+| --- | --- |
+| Current validated tag | `v8.4.5-adworks.2` |
+| Android persistent queue | Implemented and validated on a physical device |
+| iOS persistent queue | Implemented and validated on a physical device |
+| Web persistent queue | Unsupported by design |
+| Existing Capgo modes | Unchanged when `persistentTrack` is omitted |
+| Distribution | Git tag; not published to npm |
+
+The native queue commits every accepted point before delivering it to JavaScript or the optional native URL. Reads are non-destructive, acknowledgements are explicit and idempotent, and queue overflow or storage failure stops tracking instead of silently losing earlier points. See [Native Track Queue Design](docs/native-track-queue-design.md) for the complete contract, lifecycle guarantees, platform limits, and validation record.
+
+Install the validated version by pinning the immutable Git tag in `package.json`:
+
+```json
+{
+  "dependencies": {
+    "@capgo/background-geolocation": "git+https://github.com/AdworksMedia/capacitor-background-geolocation.git#v8.4.5-adworks.2"
+  }
+}
+```
+
+Then install dependencies and synchronize the native projects:
+
+```sh
+bun install
+bunx cap sync
+```
 
 ## Features
 
 - Accurate foreground and background geolocation without a paid license.
+- Opt-in native SQLite track queue with ordered, recoverable points on Android and iOS.
 - Native geofencing on iOS and Android for circular regions.
 - Enter and exit events through `geofenceTransition` while the app is alive.
 - Native webhook delivery for geofence transitions when the WebView is suspended.
@@ -96,6 +127,110 @@ BackgroundGeolocation.start(
         
 BackgroundGeolocation.setPlannedRoute({soundFile: "assets/myFile.mp3", route: [[1,2], [3,4]], distance: 30 });
 ```
+
+## Persistent native track queue
+
+Use `persistentTrack` when the host application must recover every point already accepted by native code after its WebView is suspended, recreated, or unavailable. The host application owns the session identifier and the import into its own database.
+
+### Start or reattach a session
+
+```typescript
+import { BackgroundGeolocation } from '@capgo/background-geolocation';
+
+const sessionId = crypto.randomUUID();
+
+await BackgroundGeolocation.start(
+  {
+    backgroundTitle: 'Location tracking',
+    backgroundMessage: 'The application is recording your route.',
+    requestPermissions: false,
+    stale: false,
+    distanceFilter: 2,
+    minIntervalMs: 5000,
+    persistentTrack: {
+      sessionId,
+      maxPoints: 100000,
+    },
+  },
+  (location, error) => {
+    if (error) {
+      console.error(error);
+      return;
+    }
+
+    // Useful for live UI only. Import from the native queue for durability.
+    console.log(location);
+  },
+);
+```
+
+Generate a stable, unique `sessionId` and persist it in the host application. Calling `start()` again with the same active ID reattaches the current bridge without creating a second session. Starting another ID while one is active fails with `ACTIVE_SESSION_EXISTS`.
+
+The application should present its own prominent disclosure before requesting system location permissions and must provide the platform declarations required for background location. Set `requestPermissions` according to that permission flow; the example uses `false` because the host application handles permissions before starting the track.
+
+### Recover after launch or resume
+
+```typescript
+const { session } = await BackgroundGeolocation.getActivePersistentTrackSession();
+
+if (session) {
+  // Restore the application-owned context for session.sessionId, then call
+  // start() with the same options and session ID when tracking should continue.
+  console.log('Recoverable track:', session.sessionId, session.state);
+}
+```
+
+An `active` session represents recoverable tracking intent, not a guarantee that the operating system is currently running the process. Android can restore the configured foreground service after normal process recreation. An Android force-stop and an iOS user force-quit are operating-system stop boundaries; after the next manual launch, query the persisted session and reattach when appropriate.
+
+### Import, commit, then acknowledge
+
+```typescript
+let afterSequence: number | undefined;
+
+for (;;) {
+  const page = await BackgroundGeolocation.getPersistentTrackPoints({
+    sessionId,
+    afterSequence,
+    limit: 1000,
+  });
+
+  if (page.points.length === 0 || page.nextAfterSequence === null) {
+    break;
+  }
+
+  // This must be idempotent and transactional in the host application.
+  await persistPointsInHostDatabase(page.points);
+
+  // Acknowledge only after the host transaction commits successfully.
+  await BackgroundGeolocation.acknowledgePersistentTrackPoints({
+    sessionId,
+    throughSequence: page.nextAfterSequence,
+  });
+
+  afterSequence = page.nextAfterSequence;
+  if (!page.hasMore) {
+    break;
+  }
+}
+```
+
+Reads never delete points. Acknowledgement removes points through the supplied sequence and is safe to repeat. If the process stops after the host transaction commits but before acknowledgement, the same points will be returned again, so the host import must deduplicate by session ID and sequence.
+
+### Stop, inspect, and reset
+
+```typescript
+await BackgroundGeolocation.stop();
+
+const { session } = await BackgroundGeolocation.getPersistentTrackSession({ sessionId });
+console.log(session?.state, session?.queuedPointCount);
+
+// Call only after all required points have been imported or intentionally discarded.
+await BackgroundGeolocation.resetPersistentTrackSession({ sessionId });
+```
+
+`stop()` closes the native write boundary and marks the session `stopped`, but it does not delete queued points. A session can be `active`, `stopped`, `overflowed`, or `failed`. `resetPersistentTrackSession()` is the explicit destructive cleanup operation for one named session; there is intentionally no unscoped reset-all API.
+
+Persistent mode is available only on Android and iOS. The Web implementation rejects persistent queue operations instead of emulating guarantees that a browser cannot provide.
 
 ## Native geofencing
 
