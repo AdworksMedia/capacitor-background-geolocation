@@ -53,6 +53,12 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
         CAPPluginMethod(name: "getMonitoredGeofences", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "checkPermissions", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "requestPermissions", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getActivePersistentTrackSession", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getPersistentTrackSession", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getPersistentTrackSessions", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getPersistentTrackPoints", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "acknowledgePersistentTrackPoints", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "resetPersistentTrackSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "updateHeaders", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getPluginVersion", returnType: CAPPluginReturnPromise)
     ]
@@ -84,6 +90,10 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
     private var geofenceHeaders: [String: String] = [:]
     private var minIntervalMs: Double = 0
     private var lastPostedLocationTime: Date?
+    private var persistentSessionId: String?
+    private lazy var persistentTrackStoreResult: Result<PersistentTrackStore, Error> = Result {
+        try PersistentTrackStore(databaseURL: PersistentTrackStore.defaultDatabaseURL())
+    }
 
     private let geofenceUrlKey = "CapgoBackgroundGeolocation.geofence.url"
     private let geofenceHeadersKey = "CapgoBackgroundGeolocation.geofence.headers"
@@ -103,6 +113,7 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
         }
     }
 
+    // swiftlint:disable:next function_body_length
     @objc func start(_ call: CAPPluginCall) {
         call.keepAlive = true
 
@@ -126,6 +137,34 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
             self.locationHeaders = self.stringHeaders(from: call.getObject("headers"))
             self.minIntervalMs = max(0, call.getDouble("minIntervalMs") ?? 0)
             self.lastPostedLocationTime = nil
+
+            do {
+                if let persistentOptions = call.getObject("persistentTrack") {
+                    guard let sessionId = persistentOptions["sessionId"] as? String else {
+                        throw PersistentTrackStoreError(
+                            "INVALID_SESSION_ID",
+                            "sessionId must match [A-Za-z0-9._:-]{1,128}"
+                        )
+                    }
+                    let maxPoints = try self.integerOption(
+                        persistentOptions["maxPoints"],
+                        key: "maxPoints",
+                        defaultValue: PersistentTrackStore.defaultMaxPoints
+                    )
+                    _ = try self.persistentTrackStore().startSession(
+                        sessionId: sessionId,
+                        maxPoints: maxPoints,
+                        startedAt: self.currentTimeMillis()
+                    )
+                    self.persistentSessionId = sessionId
+                } else {
+                    self.persistentSessionId = nil
+                }
+            } catch {
+                self.clearLocationRunState()
+                return self.rejectPersistentStoreError(call, error)
+            }
+
             // Create fresh location manager and initialize date
             self.locationManager = CLLocationManager()
             guard let manager = self.locationManager else {
@@ -197,22 +236,218 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
         DispatchQueue.main.async {
             self.stopUpdatingLocation()
 
-            self.locationManager?.delegate = nil
-            self.locationManager = nil
-            self.created = nil
-            self.locationBackendUrl = nil
-            self.locationHeaders = [:]
-            self.minIntervalMs = 0
-            self.lastPostedLocationTime = nil
-
-            if let callbackId = self.activeCallbackId {
-                if let savedCall = self.bridge?.savedCall(withID: callbackId) {
-                    self.bridge?.releaseCall(savedCall)
+            do {
+                var sessionId = self.persistentSessionId
+                var store: PersistentTrackStore?
+                if sessionId != nil {
+                    store = try self.persistentTrackStore()
+                } else if self.locationManager == nil,
+                          FileManager.default.fileExists(atPath: PersistentTrackStore.defaultDatabaseURL().path) {
+                    store = try self.persistentTrackStore()
+                    sessionId = try store?.getActiveSession()?.sessionId
                 }
-                self.activeCallbackId = nil
+                if let sessionId, let store {
+                    _ = try store.stopSession(sessionId: sessionId, stoppedAt: self.currentTimeMillis())
+                }
+            } catch {
+                self.clearLocationRunState()
+                return self.rejectPersistentStoreError(call, error)
             }
+
+            self.clearLocationRunState()
             return call.resolve()
         }
+    }
+
+    @objc func getActivePersistentTrackSession(_ call: CAPPluginCall) {
+        do {
+            let session = try persistentTrackStore().getActiveSession()
+            call.resolve(["session": session?.toPluginData() ?? NSNull()])
+        } catch {
+            rejectPersistentStoreError(call, error)
+        }
+    }
+
+    @objc func getPersistentTrackSession(_ call: CAPPluginCall) {
+        do {
+            let sessionId = try requiredSessionId(call)
+            let session = try persistentTrackStore().getSession(sessionId: sessionId)
+            call.resolve(["session": session?.toPluginData() ?? NSNull()])
+        } catch {
+            rejectPersistentStoreError(call, error)
+        }
+    }
+
+    @objc func getPersistentTrackSessions(_ call: CAPPluginCall) {
+        do {
+            let sessions = try persistentTrackStore().getSessions().map { $0.toPluginData() }
+            call.resolve(["sessions": sessions])
+        } catch {
+            rejectPersistentStoreError(call, error)
+        }
+    }
+
+    @objc func getPersistentTrackPoints(_ call: CAPPluginCall) {
+        do {
+            let sessionId = try requiredSessionId(call)
+            let afterSequence = try optionalIntegerOption(call.getDouble("afterSequence"), key: "afterSequence")
+            let limit = try integerOption(
+                call.getDouble("limit"),
+                key: "limit",
+                defaultValue: PersistentTrackStore.defaultPageSize
+            )
+            let page = try persistentTrackStore().getPoints(
+                sessionId: sessionId,
+                afterSequence: afterSequence.map(Int64.init),
+                limit: limit
+            )
+            call.resolve(page.toPluginData())
+        } catch {
+            rejectPersistentStoreError(call, error)
+        }
+    }
+
+    @objc func acknowledgePersistentTrackPoints(_ call: CAPPluginCall) {
+        do {
+            let sessionId = try requiredSessionId(call)
+            guard let throughSequence = try optionalIntegerOption(
+                call.getDouble("throughSequence"),
+                key: "throughSequence"
+            ) else {
+                throw PersistentTrackStoreError("INVALID_CURSOR", "throughSequence must be an integer")
+            }
+            let result = try persistentTrackStore().acknowledge(
+                sessionId: sessionId,
+                throughSequence: Int64(throughSequence)
+            )
+            call.resolve(result.toPluginData())
+        } catch {
+            rejectPersistentStoreError(call, error)
+        }
+    }
+
+    @objc func resetPersistentTrackSession(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            do {
+                let sessionId = try self.requiredSessionId(call)
+                let store = try self.persistentTrackStore()
+                if try store.getActiveSession()?.sessionId == sessionId {
+                    self.stopUpdatingLocation()
+                    _ = try store.stopSession(sessionId: sessionId, stoppedAt: self.currentTimeMillis())
+                    self.clearLocationRunState()
+                }
+                let deletedPointCount = try store.resetSession(sessionId: sessionId)
+                call.resolve(["deletedPointCount": deletedPointCount])
+            } catch {
+                self.rejectPersistentStoreError(call, error)
+            }
+        }
+    }
+
+    private func persistentTrackStore() throws -> PersistentTrackStore {
+        do {
+            return try persistentTrackStoreResult.get()
+        } catch {
+            throw PersistentTrackStoreError(
+                "PERSISTENCE_ERROR",
+                "Persistent track storage operation failed",
+                cause: error
+            )
+        }
+    }
+
+    private func requiredSessionId(_ call: CAPPluginCall) throws -> String {
+        guard let sessionId = call.getString("sessionId") else {
+            throw PersistentTrackStoreError(
+                "INVALID_SESSION_ID",
+                "sessionId must match [A-Za-z0-9._:-]{1,128}"
+            )
+        }
+        return sessionId
+    }
+
+    private func integerOption(_ rawValue: Any?, key: String, defaultValue: Int) throws -> Int {
+        guard let rawValue else { return defaultValue }
+        guard let value = numericValue(rawValue),
+              value.isFinite,
+              value.rounded(.towardZero) == value,
+              value >= Double(Int.min),
+              value <= Double(Int.max) else {
+            throw invalidNumericOption(key)
+        }
+        return Int(value)
+    }
+
+    private func optionalIntegerOption(_ rawValue: Any?, key: String) throws -> Int? {
+        guard rawValue != nil else { return nil }
+        return try integerOption(rawValue, key: key, defaultValue: 0)
+    }
+
+    private func numericValue(_ rawValue: Any) -> Double? {
+        if rawValue is Bool { return nil }
+        if let number = rawValue as? NSNumber { return number.doubleValue }
+        return nil
+    }
+
+    private func invalidNumericOption(_ key: String) -> PersistentTrackStoreError {
+        let code: String
+        switch key {
+        case "maxPoints":
+            code = "INVALID_MAX_POINTS"
+        case "limit":
+            code = "INVALID_LIMIT"
+        default:
+            code = "INVALID_CURSOR"
+        }
+        return PersistentTrackStoreError(code, "\(key) must be an integer")
+    }
+
+    private func rejectPersistentStoreError(_ call: CAPPluginCall, _ error: Error) {
+        if let storeError = error as? PersistentTrackStoreError {
+            call.reject(storeError.message, storeError.code, storeError.cause)
+        } else {
+            call.reject("Persistent track storage operation failed", "PERSISTENCE_ERROR", error)
+        }
+    }
+
+    private func currentTimeMillis() -> Int64 {
+        Int64(Date().timeIntervalSince1970 * 1_000)
+    }
+
+    private func clearLocationRunState() {
+        locationManager?.delegate = nil
+        locationManager = nil
+        created = nil
+        locationBackendUrl = nil
+        locationHeaders = [:]
+        minIntervalMs = 0
+        lastPostedLocationTime = nil
+        persistentSessionId = nil
+
+        if let callbackId = activeCallbackId {
+            if let savedCall = bridge?.savedCall(withID: callbackId) {
+                bridge?.releaseCall(savedCall)
+            }
+            activeCallbackId = nil
+        }
+    }
+
+    private func failPersistentTracking(_ error: PersistentTrackStoreError) {
+        let sessionId = persistentSessionId
+        if error.code != "QUEUE_FULL", let sessionId {
+            try? persistentTrackStore().failSession(
+                sessionId: sessionId,
+                errorCode: error.code,
+                errorMessage: error.message,
+                stoppedAt: currentTimeMillis()
+            )
+        }
+
+        stopUpdatingLocation()
+        let callback = activeCallbackId.flatMap { bridge?.savedCall(withID: $0) }
+        activeCallbackId = nil
+        clearLocationRunState()
+        callback?.reject(error.message, error.code, error.cause)
     }
 
     @objc func updateHeaders(_ call: CAPPluginCall) {
@@ -846,11 +1081,7 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
         _ manager: CLLocationManager,
         didFailWithError error: Error
     ) {
-        guard manager === locationManager,
-              let callbackId = activeCallbackId,
-              let call = self.bridge?.savedCall(withID: callbackId) else {
-            return
-        }
+        guard manager === locationManager else { return }
 
         if let clErr = error as? CLError {
             if clErr.code == .locationUnknown {
@@ -858,14 +1089,24 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
                 // it cannot get a fix immediately.
                 return
             } else if clErr.code == .denied {
+                if persistentSessionId != nil {
+                    failPersistentTracking(
+                        PersistentTrackStoreError("NOT_AUTHORIZED", "Permission denied.", cause: error)
+                    )
+                    return
+                }
                 stopUpdatingLocation()
-                return call.reject(
-                    "Permission denied.",
-                    "NOT_AUTHORIZED"
-                )
+                if let callbackId = activeCallbackId,
+                   let call = self.bridge?.savedCall(withID: callbackId) {
+                    call.reject("Permission denied.", "NOT_AUTHORIZED")
+                }
+                return
             }
         }
-        return call.reject(error.localizedDescription, nil, error)
+        if let callbackId = activeCallbackId,
+           let call = self.bridge?.savedCall(withID: callbackId) {
+            call.reject(error.localizedDescription, nil, error)
+        }
     }
 
     public func locationManager(
@@ -876,6 +1117,33 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
               let location = locations.last,
               isLocationValid(location) else {
             return
+        }
+
+        if let sessionId = persistentSessionId {
+            do {
+                let result = try persistentTrackStore().appendLocation(
+                    sessionId: sessionId,
+                    location: location,
+                    persistedAt: currentTimeMillis()
+                )
+                if result.overflowed {
+                    failPersistentTracking(
+                        PersistentTrackStoreError(
+                            "QUEUE_FULL",
+                            "Persistent track queue reached its configured point limit"
+                        )
+                    )
+                    return
+                }
+            } catch {
+                let storeError = error as? PersistentTrackStoreError ?? PersistentTrackStoreError(
+                    "PERSISTENCE_ERROR",
+                    "Persistent track storage operation failed",
+                    cause: error
+                )
+                failPersistentTracking(storeError)
+                return
+            }
         }
 
         // Native delivery does not depend on the bridge, so it keeps working

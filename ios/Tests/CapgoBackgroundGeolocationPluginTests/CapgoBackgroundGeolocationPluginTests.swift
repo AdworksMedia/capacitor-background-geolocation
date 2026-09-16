@@ -45,6 +45,12 @@ class CapgoBackgroundGeolocationTests: XCTestCase {
         XCTAssertTrue(methodNames.contains("removeGeofence"))
         XCTAssertTrue(methodNames.contains("removeAllGeofences"))
         XCTAssertTrue(methodNames.contains("getMonitoredGeofences"))
+        XCTAssertTrue(methodNames.contains("getActivePersistentTrackSession"))
+        XCTAssertTrue(methodNames.contains("getPersistentTrackSession"))
+        XCTAssertTrue(methodNames.contains("getPersistentTrackSessions"))
+        XCTAssertTrue(methodNames.contains("getPersistentTrackPoints"))
+        XCTAssertTrue(methodNames.contains("acknowledgePersistentTrackPoints"))
+        XCTAssertTrue(methodNames.contains("resetPersistentTrackSession"))
         let updateHeadersMethod = plugin.pluginMethods.first { $0.name == "updateHeaders" }
         XCTAssertNotNil(updateHeadersMethod, "updateHeaders should be registered in pluginMethods")
         XCTAssertEqual(updateHeadersMethod?.returnType, CAPPluginReturnPromise)

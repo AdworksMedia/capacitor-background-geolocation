@@ -6,7 +6,9 @@ This document fixes the cross-platform contract for the opt-in persistent track 
 
 Existing `start()` consumers remain unchanged. Native persistence is enabled only when `persistentTrack` is present in `StartOptions`.
 
-The `8.4.5-adworks.1` prerelease contains the Android implementation. The shared TypeScript contract is intentionally cross-platform, but the matching iOS implementation and device validation remain required before this fork can claim cross-platform production readiness.
+The first Adworks prerelease established the Android implementation and shared contract. Version `8.4.5-adworks.2` adds the matching iOS implementation using the system SQLite library.
+
+Physical-device validation on an iPhone 14 running iOS 26.6.1 confirmed foreground collection, continued queue growth in background with the screen locked, recovery and reattachment after force-quit and manual relaunch, and the complete stop/read/acknowledge/reset flow. An explicit iOS force-quit remains a platform stop boundary; the plugin preserves the active session and already committed points for recovery but does not promise continued collection while the application is force-quit.
 
 The queue owns a private SQLite database inside the host application's sandbox. It never opens the host application's primary database.
 
@@ -257,6 +259,8 @@ Swipe from Recents is therefore expected to preserve an active persistent sessio
 The queue writes every `CLLocation` before bridge or HTTP delivery. Normal background execution and lock-screen delivery do not depend on JavaScript. The active session remains discoverable after ordinary application relaunch.
 
 An explicit user force-quit normally prevents iOS from relaunching location tracking. The plugin preserves recoverable session metadata but does not promise to bypass this platform restriction. The host application must explain and resume the session after a later manual launch.
+
+The implementation uses one serialized SQLite connection in the application-support directory, with foreign keys enabled and schema evolution controlled by `user_version`. Swift Package Manager and CocoaPods both link the system `sqlite3` library; no third-party database dependency is added.
 
 ## Web behaviour
 

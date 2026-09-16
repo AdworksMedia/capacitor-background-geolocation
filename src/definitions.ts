@@ -239,8 +239,8 @@ export interface StartOptions {
    * Enables native SQLite persistence for this tracking session.
    *
    * A point is committed before it is emitted to JavaScript or submitted to
-   * {@link StartOptions.url}. The 8.4.5-adworks.1 prerelease implements this
-   * mode on Android; iOS support is pending. Web runtimes are unsupported.
+   * {@link StartOptions.url}. The Adworks prerelease implements this mode on
+   * Android and iOS. Web runtimes are unsupported.
    *
    * @since 8.4.5-adworks.1
    */
