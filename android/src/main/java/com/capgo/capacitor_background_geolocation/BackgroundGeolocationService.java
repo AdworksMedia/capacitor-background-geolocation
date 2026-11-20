@@ -43,6 +43,8 @@ public class BackgroundGeolocationService extends Service {
 
     // Must be unique for this application.
     private static final int NOTIFICATION_ID = 28351;
+    static final String EXTRA_NOTIFICATION_TITLE = "notificationTitle";
+    static final String EXTRA_NOTIFICATION_MESSAGE = "notificationMessage";
 
     private String callbackId;
 
@@ -58,6 +60,8 @@ public class BackgroundGeolocationService extends Service {
     private Runnable restartRunnable;
     private float currentDistanceFilter;
     private long currentMinIntervalMs;
+    private boolean locationLogEnabled;
+    private int locationLogMaxEntries;
     private PowerManager.WakeLock wakeLock;
 
     // How long a GPS fix is considered "fresh" before we allow a NETWORK_PROVIDER fix through.
@@ -133,8 +137,13 @@ public class BackgroundGeolocationService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         Context context = getApplicationContext();
+        // Meet the foreground deadline before the binder starts location updates.
+        if (intent != null && intent.hasExtra(EXTRA_NOTIFICATION_TITLE)) {
+            promoteToForeground(intent.getStringExtra(EXTRA_NOTIFICATION_TITLE), intent.getStringExtra(EXTRA_NOTIFICATION_MESSAGE));
+        }
         if (!LocationStore.isEnabled(context)) {
-            // Preserve the original behavior for ordinary callback-only tracking.
+            // Not in native delivery mode: preserve the original behavior where the
+            // service does not outlive the app, so it is not sticky-restarted.
             return START_NOT_STICKY;
         }
         nativePostUrl = LocationStore.getUrl(context);
@@ -162,6 +171,8 @@ public class BackgroundGeolocationService extends Service {
             currentDistanceFilter = LocationStore.getDistanceFilter(context);
             currentMinIntervalMs = LocationStore.getMinIntervalMs(context);
             networkFallbackEnabled = LocationStore.getNetworkFallback(context);
+            locationLogEnabled = LocationStore.getLocationLog(context);
+            locationLogMaxEntries = LocationStore.getLocationLogMaxEntries(context);
             locationCallback = createLocationListener(this);
             lastGpsFixAtMs = SystemClock.elapsedRealtime();
             synchronized (persistenceBoundaryLock) {
@@ -278,7 +289,7 @@ public class BackgroundGeolocationService extends Service {
         if (LocationManager.GPS_PROVIDER.equals(location.getProvider())) {
             lastGpsFixAtMs = SystemClock.elapsedRealtime();
         } else if (LocationManager.NETWORK_PROVIDER.equals(location.getProvider())) {
-            boolean gpsStillFresh = lastGpsFixAtMs != 0 && (SystemClock.elapsedRealtime() - lastGpsFixAtMs) < NETWORK_FALLBACK_GRACE_MS;
+            boolean gpsStillFresh = lastGpsFixAtMs != 0 && SystemClock.elapsedRealtime() - lastGpsFixAtMs < NETWORK_FALLBACK_GRACE_MS;
             boolean tooImprecise = !location.hasAccuracy() || location.getAccuracy() > NETWORK_FIX_MAX_ACCURACY_M;
             if (gpsStillFresh || tooImprecise) {
                 // Drop it - and skip startWatchdog() below so a run of rejected fixes can't mask a
@@ -332,6 +343,12 @@ public class BackgroundGeolocationService extends Service {
         }
 
         startWatchdog();
+        if (locationLogEnabled) {
+            boolean locationLogSqlite = LocationStore.getLocationLogSqlite(getApplicationContext());
+            if (!locationLogSqlite || nativePostUrl == null) {
+                logLocation(location);
+            }
+        }
         if (nativePostUrl != null) {
             postLocationNatively(location);
         }
@@ -377,10 +394,26 @@ public class BackgroundGeolocationService extends Service {
         Context context = getApplicationContext();
         JSONObject payload = locationToJson(location);
         postExecutor.execute(() -> {
+            long logId = LocationStore.logLocationForNativePost(context, payload);
             try {
-                LocationStore.sendLocation(context, payload);
+                LocationStore.sendLocation(context, payload, logId);
             } catch (Exception e) {
                 Logger.error("Native location POST failed", e);
+            }
+        });
+    }
+
+    // Adds a location to the location log on the log's own thread, so a slow disk never holds up the next one.
+    private void logLocation(android.location.Location location) {
+        Context context = getApplicationContext();
+        JSONObject entry = locationToJson(location);
+        entry.remove("source");
+        int maxEntries = locationLogMaxEntries;
+        LocationLog.EXECUTOR.execute(() -> {
+            try {
+                LocationLog.getInstance(context).append(entry, maxEntries);
+            } catch (Exception e) {
+                Logger.error("Could not add the location to the location log", e);
             }
         });
     }
@@ -486,9 +519,17 @@ public class BackgroundGeolocationService extends Service {
             final Map<String, String> headers,
             final long minIntervalMs,
             final boolean networkFallback,
+            final boolean locationLog,
+            final int locationLogMaxEntries,
+            final boolean locationLogSqlite,
             final String requestedPersistentSessionId,
             final int persistentMaxPoints
         ) throws PersistentTrackStore.StoreException {
+            // The plugin starts this service with startForegroundService(). If the setup
+            // below throws (for example 'provider "gps" does not exist' on a device without
+            // a GPS chip), the plugin stops the service again, and Android kills the app
+            // unless startForeground() already ran. So promote first.
+            promoteToForeground(notificationTitle, notificationMessage);
             PersistentTrackStore.Session activeSession = persistentTrackStore.getActiveSession();
             if (requestedPersistentSessionId == null && activeSession != null) {
                 throw new PersistentTrackStore.StoreException(
@@ -500,17 +541,20 @@ public class BackgroundGeolocationService extends Service {
                 persistentTrackStore.startSession(requestedPersistentSessionId, persistentMaxPoints, System.currentTimeMillis());
             }
 
-            nativePostUrl = (url == null || url.isEmpty()) ? null : url;
+            String postUrl = url == null || url.isEmpty() ? null : url;
             if (
                 !LocationStore.saveSetup(
                     getApplicationContext(),
-                    nativePostUrl,
+                    postUrl,
                     notificationTitle,
                     notificationMessage,
                     distanceFilter,
                     headers,
                     Math.max(0L, minIntervalMs),
                     networkFallback,
+                    locationLog,
+                    locationLogMaxEntries,
+                    locationLogSqlite,
                     requestedPersistentSessionId,
                     persistentMaxPoints
                 )
@@ -525,12 +569,15 @@ public class BackgroundGeolocationService extends Service {
                 }
                 throw new PersistentTrackStore.StoreException("PERSISTENCE_ERROR", "Could not persist sticky restart configuration");
             }
+            nativePostUrl = postUrl;
             try {
                 // The first startForegroundService call happens before the
                 // binder can persist this setup, so that onStartCommand call
                 // is intentionally non-sticky. Start once more after commit
                 // so Android records START_STICKY for this configured run.
-                getApplicationContext().startService(new Intent(getApplicationContext(), BackgroundGeolocationService.class));
+                if (postUrl != null || requestedPersistentSessionId != null) {
+                    getApplicationContext().startService(new Intent(getApplicationContext(), BackgroundGeolocationService.class));
+                }
             } catch (RuntimeException exception) {
                 LocationStore.clear(getApplicationContext());
                 nativePostUrl = null;
@@ -554,6 +601,13 @@ public class BackgroundGeolocationService extends Service {
             currentMinIntervalMs = Math.max(0L, minIntervalMs);
             networkFallbackEnabled = networkFallback;
             persistentSessionId = requestedPersistentSessionId;
+            locationLogEnabled = locationLog;
+            BackgroundGeolocationService.this.locationLogMaxEntries = locationLogMaxEntries;
+
+            LocationLog.resetInstance();
+            if (locationLog && locationLogSqlite) {
+                LocationLog.EXECUTOR.execute(() -> LocationLog.getInstance(getApplicationContext()).open());
+            }
 
             // The service may already be running (for example after a sticky
             // restart), so drop any previous listener before registering a new one.
@@ -568,7 +622,6 @@ public class BackgroundGeolocationService extends Service {
             // Arm the watchdog here so rejected network fixes during the grace period cannot
             // leave tracking without a restart path if GPS_PROVIDER goes silent.
             startWatchdog();
-            promoteToForeground(notificationTitle, notificationMessage);
         }
 
         void updateHeaders(final Map<String, String> headers) {

@@ -19,6 +19,11 @@ buildscript {
 
 apply plugin: 'com.android.library'
 
+// The plugin version is read from package.json at build time so the value
+// returned by getPluginVersion() can never drift from the published package.
+def pluginVersion = new groovy.json.JsonSlurper().parse(file('../package.json')).version
+def includeLocationLogSqlite = project.findProperty('backgroundGeolocation.locationLogSqlite.include') ?: 'false'
+
 android {
     namespace = "com.capgo.capacitor_background_geolocation"
     compileSdk = project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 36
@@ -28,6 +33,24 @@ android {
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField "String", "PLUGIN_VERSION", "\"${pluginVersion}\""
+        buildConfigField "boolean", "LOCATION_LOG_SQLITE", includeLocationLogSqlite == 'true' ? 'true' : 'false'
+        consumerProguardFiles 'consumer-rules.pro'
+    }
+    buildFeatures {
+        buildConfig = true
+    }
+    sourceSets {
+        main {
+            if (includeLocationLogSqlite == 'true') {
+                java.srcDirs += 'src/sqliteEnabled/java'
+            }
+        }
+        test {
+            if (includeLocationLogSqlite == 'true') {
+                java.srcDirs += 'src/sqliteTest/java'
+            }
+        }
     }
     buildTypes {
         release {
@@ -57,6 +80,9 @@ dependencies {
     implementation "androidx.work:work-runtime:$androidxWorkRuntimeVersion"
     testImplementation "junit:junit:$junitVersion"
     testImplementation "org.json:json:20260814"
+    testImplementation "org.robolectric:robolectric:4.17"
+    testImplementation "androidx.test:core:1.7.0"
+    testImplementation "androidx.work:work-testing:$androidxWorkRuntimeVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation "com.google.android.gms:play-services-location:$playServicesLocationVersion"

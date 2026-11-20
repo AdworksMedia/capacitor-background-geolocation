@@ -51,6 +51,8 @@ class CapgoBackgroundGeolocationTests: XCTestCase {
         XCTAssertTrue(methodNames.contains("getPersistentTrackPoints"))
         XCTAssertTrue(methodNames.contains("acknowledgePersistentTrackPoints"))
         XCTAssertTrue(methodNames.contains("resetPersistentTrackSession"))
+        XCTAssertTrue(methodNames.contains("getLocationLog"))
+        XCTAssertTrue(methodNames.contains("clearLocationLog"))
         let updateHeadersMethod = plugin.pluginMethods.first { $0.name == "updateHeaders" }
         XCTAssertNotNil(updateHeadersMethod, "updateHeaders should be registered in pluginMethods")
         XCTAssertEqual(updateHeadersMethod?.returnType, CAPPluginReturnPromise)
@@ -373,5 +375,24 @@ class CapgoBackgroundGeolocationTests: XCTestCase {
 
         XCTAssertEqual(formatted["latitude"] as? Double, preciseLat)
         XCTAssertEqual(formatted["longitude"] as? Double, preciseLon)
+    }
+
+    // MARK: - Location Log Tests
+
+    func testClearLocationLogRejectsUpToIdThatIsNotANumber() throws {
+        let rejected = expectation(description: "rejected")
+        let call = try XCTUnwrap(
+            CAPPluginCall(
+                callbackId: "test",
+                methodName: "clearLocationLog",
+                options: ["upToId": Double.nan],
+                success: { _, _ in },
+                error: { _ in rejected.fulfill() }
+            )
+        )
+
+        plugin?.clearLocationLog(call)
+
+        wait(for: [rejected], timeout: 1)
     }
 }

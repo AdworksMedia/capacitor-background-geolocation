@@ -9,10 +9,12 @@ Pod::Spec.new do |s|
   s.license = package['license']
   s.homepage = package['repository']['url']
   s.author = package['author']
-  s.source = { :git => package['repository']['url'], :tag => s.version.to_s }
+  s.source = { :git => package['repository']['url'], :tag => "v#{s.version}" }
   s.source_files = 'ios/Sources/**/*.{swift,h,m,c,cc,mm,cpp}'
   s.ios.deployment_target = '15.0'
   s.dependency 'Capacitor'
   s.libraries = 'sqlite3'
   s.swift_version = '5.1'
+  # s.source_files += 'ios/SqliteLocationLog/**/*.swift'  # Disabled via config (compileOnly)
+  # s.pod_target_xcconfig = { 'OTHER_SWIFT_FLAGS' => '$(inherited) -DBGGEO_LOCATION_LOG_SQLITE' }  # Disabled via config (compileOnly)
 end

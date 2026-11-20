@@ -36,6 +36,7 @@ import java.net.URL;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
@@ -55,12 +56,21 @@ import org.json.JSONObject;
 )
 public class BackgroundGeolocation extends Plugin {
 
-    private final String pluginVersion = "";
+    private final String pluginVersion = BuildConfig.PLUGIN_VERSION;
 
     private CompletableFuture<BackgroundGeolocationService.LocalBinder> serviceConnectionFuture;
+    // Completes once `serviceBinder.start(...)` has actually run, so `stop()` can
+    // wait for it instead of racing it on the raw service binding.
+    private CompletableFuture<Void> serviceStartedFuture;
     private ServiceConnection serviceConnection;
     private CompletableFuture<Void> locationPermissionFuture;
     private CompletableFuture<Void> geofencePermissionFuture;
+    // Completes when stopOrphanedNativeDelivery finishes so start() cannot race it.
+    private CompletableFuture<Void> orphanNativeDeliveryStopFuture;
+    private final Set<PluginCall> canceledPermissionStarts = Collections.synchronizedSet(
+        Collections.newSetFromMap(new IdentityHashMap<PluginCall, Boolean>())
+    );
+    private PluginCall watchCall;
 
     private void fetchLastLocation(PluginCall call) {
         try {
@@ -86,13 +96,31 @@ public class BackgroundGeolocation extends Plugin {
             return;
         }
 
+        if (orphanNativeDeliveryStopFuture != null && !orphanNativeDeliveryStopFuture.isDone()) {
+            call.reject("Service already started", "ALREADY_STARTED");
+            return;
+        }
+
         if (getPermissionState("location") != PermissionState.GRANTED && call.getBoolean("requestPermissions", true)) {
+            if (locationPermissionFuture != null && !locationPermissionFuture.isDone() && watchCall != null) {
+                call.reject("Service already started", "ALREADY_STARTED");
+                return;
+            }
             call.setKeepAlive(true);
+            watchCall = call;
             requestLocationPermissions(call)
                 .thenRun(() -> {
+                    if (canceledPermissionStarts.remove(call)) {
+                        if (watchCall == call) {
+                            watchCall = null;
+                            call.setKeepAlive(false);
+                        }
+                        return;
+                    }
                     proceedWithStart(call);
                 })
                 .exceptionally((throwable) -> {
+                    canceledPermissionStarts.remove(call);
                     call.reject("User denied location permission", "NOT_AUTHORIZED");
                     return null;
                 });
@@ -107,10 +135,17 @@ public class BackgroundGeolocation extends Plugin {
 
         // Everything is OK, continuing to adding a watcher
         call.setKeepAlive(true);
+        watchCall = call;
         proceedWithStart(call);
     }
 
     private void proceedWithStart(PluginCall call) {
+        if (call.getBoolean("locationLogSqlite", false) && !BuildConfig.LOCATION_LOG_SQLITE) {
+            watchCall = null;
+            call.setKeepAlive(false);
+            call.reject(LocationLog.SQLITE_DISABLED_MESSAGE);
+            return;
+        }
         String persistentSessionId = null;
         int persistentMaxPoints = PersistentTrackStore.DEFAULT_MAX_POINTS;
         try {
@@ -120,9 +155,14 @@ public class BackgroundGeolocation extends Plugin {
                     throw new PersistentTrackStore.StoreException("INVALID_PERSISTENT_TRACK", "persistentTrack must be an object");
                 }
                 persistentSessionId = persistentTrack.getString("sessionId");
+                if (persistentSessionId == null) {
+                    throw new PersistentTrackStore.StoreException("INVALID_SESSION_ID", "persistentTrack requires a sessionId");
+                }
                 persistentMaxPoints = intOptionFromObject(persistentTrack, "maxPoints", PersistentTrackStore.DEFAULT_MAX_POINTS);
             }
         } catch (PersistentTrackStore.StoreException exception) {
+            watchCall = null;
+            call.setKeepAlive(false);
             rejectStoreException(call, exception);
             return;
         }
@@ -130,39 +170,59 @@ public class BackgroundGeolocation extends Plugin {
         if (call.getBoolean("stale", false)) {
             fetchLastLocation(call);
         }
+        String backgroundTitle = call.getString("backgroundTitle", "Using your location");
+        String backgroundMessage = call.getString("backgroundMessage", "");
+        // The service promotes itself from these extras in onStartCommand(), without
+        // waiting for the bind.
+        Intent startIntent = createServiceIntent()
+            .putExtra(BackgroundGeolocationService.EXTRA_NOTIFICATION_TITLE, backgroundTitle)
+            .putExtra(BackgroundGeolocationService.EXTRA_NOTIFICATION_MESSAGE, backgroundMessage);
+        CompletableFuture<BackgroundGeolocationService.LocalBinder> connectionFuture = getServiceConnection(startIntent);
         final String requestedPersistentSessionId = persistentSessionId;
         final int requestedPersistentMaxPoints = persistentMaxPoints;
-        CompletableFuture<BackgroundGeolocationService.LocalBinder> connectionFuture = getServiceConnection();
-        connectionFuture
-            .thenAccept((serviceBinder) -> {
-                try {
-                    serviceBinder.start(
-                        call.getCallbackId(),
-                        call.getString("backgroundTitle", "Using your location"),
-                        call.getString("backgroundMessage", ""),
-                        call.getFloat("distanceFilter", 0f),
-                        call.getString("url", null),
-                        headersFromCall(call),
-                        longOptionFromCall(call, "minIntervalMs", 0L),
-                        call.getBoolean("networkFallback", false),
-                        requestedPersistentSessionId,
-                        requestedPersistentMaxPoints
-                    );
-                } catch (PersistentTrackStore.StoreException exception) {
-                    throw new CompletionException(exception);
+        serviceStartedFuture = connectionFuture.thenAccept((serviceBinder) -> {
+            try {
+                serviceBinder.start(
+                    call.getCallbackId(),
+                    backgroundTitle,
+                    backgroundMessage,
+                    call.getFloat("distanceFilter", 0f),
+                    call.getString("url", null),
+                    headersFromCall(call),
+                    longOptionFromCall(call, "minIntervalMs", 0L),
+                    call.getBoolean("networkFallback", false),
+                    call.getBoolean("locationLog", false),
+                    Math.max(1, call.getInt("locationLogMaxEntries", LocationLog.DEFAULT_MAX_ENTRIES)),
+                    call.getBoolean("locationLogSqlite", false),
+                    requestedPersistentSessionId,
+                    requestedPersistentMaxPoints
+                );
+            } catch (PersistentTrackStore.StoreException exception) {
+                throw new CompletionException(exception);
+            }
+        });
+        serviceStartedFuture.exceptionally((throwable) -> {
+            if (serviceConnectionFuture == connectionFuture) {
+                releaseServiceConnection();
+                if (!LocationStore.isEnabled(getContext())) {
+                    stopBackgroundService();
                 }
-            })
-            .exceptionally((throwable) -> {
-                if (serviceConnectionFuture == connectionFuture) {
-                    releaseServiceConnection();
-                    if (!LocationStore.isEnabled(getContext())) {
-                        stopBackgroundService();
-                    }
-                    serviceConnectionFuture = null;
-                }
-                rejectServiceStartFailure(call, throwable);
-                return null;
-            });
+                serviceConnectionFuture = null;
+            }
+            if (watchCall == call) {
+                watchCall = null;
+                call.setKeepAlive(false);
+            }
+            rejectServiceStartFailure(call, throwable);
+            return null;
+        });
+    }
+
+    /** Drops geofence transitions queued for a native POST, for sign-out or an account switch. */
+    @PluginMethod
+    public void clearGeofenceQueue(PluginCall call) {
+        GeofenceStore.cancelQueuedTransitions(getContext());
+        call.resolve();
     }
 
     @PluginMethod
@@ -189,9 +249,12 @@ public class BackgroundGeolocation extends Plugin {
         if (locationPermissionFuture != null) {
             return locationPermissionFuture;
         }
-        locationPermissionFuture = new CompletableFuture<>();
+        // The permission callback can run synchronously when Android cancels the request; it may
+        // complete and clear locationPermissionFuture before this method returns.
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        locationPermissionFuture = future;
         requestPermissionForAlias("location", call, "locationPermissionsCallback");
-        return locationPermissionFuture;
+        return future;
     }
 
     @PermissionCallback
@@ -237,12 +300,14 @@ public class BackgroundGeolocation extends Plugin {
     @PermissionCallback
     private void generalLocationPermissionsCallback(PluginCall call) {
         Set<String> permissions = parseRequestedPermissions(call);
+        permissions.remove("location");
         continuePermissionRequest(call, permissions);
     }
 
     @PermissionCallback
     private void generalBackgroundPermissionsCallback(PluginCall call) {
         Set<String> permissions = parseRequestedPermissions(call);
+        permissions.remove("backgroundLocation");
         continuePermissionRequest(call, permissions);
     }
 
@@ -337,40 +402,71 @@ public class BackgroundGeolocation extends Plugin {
 
     @PluginMethod
     public void stop(PluginCall call) {
+        stopTracking(call, null);
+    }
+
+    private void stopTracking(PluginCall call, String resetSessionId) {
         if (serviceConnectionFuture == null) {
-            try {
-                if (!LocationStore.isEnabled(getContext()) && PersistentTrackStore.getInstance(getContext()).getActiveSession() == null) {
-                    call.resolve();
-                    return;
+            if (locationPermissionFuture != null && !locationPermissionFuture.isDone()) {
+                PluginCall savedCall = watchCall;
+                if (savedCall != null) {
+                    canceledPermissionStarts.add(savedCall);
                 }
-            } catch (PersistentTrackStore.StoreException exception) {
-                rejectStoreException(call, exception);
-                return;
+                watchCall = null;
+                if (savedCall != null) {
+                    savedCall.setKeepAlive(false);
+                }
             }
+            stopOrphanedNativeDelivery(call, resetSessionId);
+            return;
         }
-        CompletableFuture<BackgroundGeolocationService.LocalBinder> connectionFuture = getServiceConnection();
-        connectionFuture
+        // Wait for an in-flight start() to reach the service before stopping it.
+        // Without this, a start() immediately followed by stop() can deliver the
+        // stop to the service before the start (CompletableFuture runs dependents
+        // in LIFO order), leaving tracking running after stop() resolved.
+        CompletableFuture<BackgroundGeolocationService.LocalBinder> connectionAtStop = serviceConnectionFuture;
+        PluginCall watchCallAtStop = watchCall;
+        CompletableFuture<Void> started = serviceStartedFuture;
+        CompletableFuture<BackgroundGeolocationService.LocalBinder> ready =
+            started == null
+                ? connectionAtStop
+                : started
+                      .handle((ignored, startError) -> null)
+                      .thenCompose((ignored) -> {
+                          if (
+                              connectionAtStop == null ||
+                              serviceConnectionFuture != connectionAtStop ||
+                              connectionAtStop.isCompletedExceptionally()
+                          ) {
+                              // Start failed and was already cleaned up; nothing to stop.
+                              return CompletableFuture.completedFuture(null);
+                          }
+                          return connectionAtStop;
+                      });
+        ready
             .thenAccept((service) -> {
-                try {
-                    releaseLocationCallback(service.stop());
-                    call.resolve();
+                if (service != null && serviceConnectionFuture == connectionAtStop && serviceStartedFuture == started) {
+                    stopServiceTracking(service);
+                }
+                clearStoppedWatchCall(watchCallAtStop);
+                if (serviceConnectionFuture == connectionAtStop && serviceStartedFuture == started) {
                     releaseServiceConnection();
                     serviceConnectionFuture = null;
-                } catch (PersistentTrackStore.StoreException exception) {
-                    throw new CompletionException(exception);
+                    serviceStartedFuture = null;
                 }
+                resolveTrackingStop(call, resetSessionId);
             })
             .exceptionally((throwable) -> {
-                if (serviceConnectionFuture == connectionFuture) {
+                // Never leave the plugin wedged: if `serviceConnectionFuture` stayed
+                // set here, every later start() would be rejected with
+                // ALREADY_STARTED until the app process died.
+                if (serviceConnectionFuture == connectionAtStop) {
                     releaseServiceConnection();
+                    stopBackgroundService();
                     serviceConnectionFuture = null;
+                    serviceStartedFuture = null;
                 }
-                Throwable cause = unwrapThrowable(throwable);
-                if (cause instanceof PersistentTrackStore.StoreException) {
-                    rejectStoreException(call, (PersistentTrackStore.StoreException) cause);
-                } else {
-                    call.reject("Service connection failed: " + cause.getMessage(), toException(cause));
-                }
+                rejectTrackingStop(call, throwable);
                 return null;
             });
     }
@@ -459,31 +555,7 @@ public class BackgroundGeolocation extends Plugin {
             return;
         }
 
-        CompletableFuture<BackgroundGeolocationService.LocalBinder> connectionFuture = getServiceConnection();
-        connectionFuture
-            .thenAccept((service) -> {
-                try {
-                    releaseLocationCallback(service.stop());
-                    releaseServiceConnection();
-                    serviceConnectionFuture = null;
-                    resolvePersistentTrackReset(call, PersistentTrackStore.getInstance(getContext()), sessionId);
-                } catch (PersistentTrackStore.StoreException exception) {
-                    throw new CompletionException(exception);
-                }
-            })
-            .exceptionally((throwable) -> {
-                if (serviceConnectionFuture == connectionFuture) {
-                    releaseServiceConnection();
-                    serviceConnectionFuture = null;
-                }
-                Throwable cause = unwrapThrowable(throwable);
-                if (cause instanceof PersistentTrackStore.StoreException) {
-                    rejectStoreException(call, (PersistentTrackStore.StoreException) cause);
-                } else {
-                    call.reject("Service connection failed: " + cause.getMessage(), toException(cause));
-                }
-                return null;
-            });
+        stopTracking(call, sessionId);
     }
 
     @PluginMethod
@@ -541,7 +613,7 @@ public class BackgroundGeolocation extends Plugin {
 
         JSObject payload = call.getObject("payload", new JSObject());
         boolean backgroundLocation = call.getBoolean("backgroundLocation", false);
-        GeofenceStore.saveSetup(
+        GeofenceStore.saveSetupForGeofencing(
             getContext(),
             url,
             call.getBoolean("notifyOnEntry", true),
@@ -685,6 +757,44 @@ public class BackgroundGeolocation extends Plugin {
         }
         result.put("regions", regions);
         call.resolve(result);
+    }
+
+    @PluginMethod
+    public void getLocationLog(PluginCall call) {
+        if (!isWholeNumberOrAbsent(call, "afterId")) {
+            call.reject("afterId must be a number");
+            return;
+        }
+        Context context = getContext();
+        long afterId = longOptionFromCall(call, "afterId", 0L);
+        int limit = Math.min(LocationLog.MAX_LIMIT, Math.max(1, call.getInt("limit", LocationLog.DEFAULT_LIMIT)));
+        LocationLog.EXECUTOR.execute(() -> {
+            try {
+                JSObject result = new JSObject();
+                result.put("entries", LocationLog.getInstance(context).read(afterId, limit));
+                call.resolve(result);
+            } catch (Exception exception) {
+                call.reject("Could not read the location log", exception);
+            }
+        });
+    }
+
+    @PluginMethod
+    public void clearLocationLog(PluginCall call) {
+        if (!isWholeNumberOrAbsent(call, "upToId")) {
+            call.reject("upToId must be a number");
+            return;
+        }
+        Context context = getContext();
+        Long upToId = nullableWholeLongFromCall(call, "upToId");
+        LocationLog.EXECUTOR.execute(() -> {
+            try {
+                LocationLog.getInstance(context).clear(upToId);
+                call.resolve();
+            } catch (Exception exception) {
+                call.reject("Could not clear the location log", exception);
+            }
+        });
     }
 
     private CompletableFuture<Void> requestGeofencePermissions(PluginCall call, boolean backgroundLocation) {
@@ -853,6 +963,37 @@ public class BackgroundGeolocation extends Plugin {
         return new PersistentTrackStore.StoreException(code, key + " must be an integer");
     }
 
+    static boolean isNumberOrAbsent(PluginCall call, String key) {
+        return !call.getData().has(key) || call.getData().opt(key) instanceof Number;
+    }
+
+    static boolean isWholeNumberOrAbsent(PluginCall call, String key) {
+        if (!call.getData().has(key)) {
+            return true;
+        }
+        Object value = call.getData().opt(key);
+        if (!(value instanceof Number)) {
+            return false;
+        }
+        double number = ((Number) value).doubleValue();
+        if (!Double.isFinite(number)) {
+            return false;
+        }
+        double rounded = Math.rint(number);
+        if (number != rounded) {
+            return false;
+        }
+        long asLong = (long) rounded;
+        return (double) asLong == rounded;
+    }
+
+    static Long nullableWholeLongFromCall(PluginCall call, String key) {
+        if (!call.getData().has(key)) {
+            return null;
+        }
+        return (long) Math.rint(((Number) call.getData().opt(key)).doubleValue());
+    }
+
     private static Map<String, String> headersFromCall(PluginCall call) {
         return headersFromObject(call.getObject("headers"));
     }
@@ -901,21 +1042,23 @@ public class BackgroundGeolocation extends Plugin {
     private final LocalEvents.Listener localEventListener = new LocalEvents.Listener() {
         @Override
         public void onLocation(String callbackId, Location location) {
-            PluginCall call = getBridge().getSavedCall(callbackId);
-            if (call == null) {
-                return;
+            PluginCall call = watchCall;
+            if (call != null && call.getCallbackId().equals(callbackId)) {
+                call.resolve(formatLocation(location));
             }
-            call.resolve(formatLocation(location));
         }
 
         @Override
         public void onLocationError(String callbackId, String code, String message) {
-            PluginCall call = getBridge().getSavedCall(callbackId);
-            if (call != null) {
-                call.reject(message, code);
+            PluginCall call = watchCall;
+            if (call == null || !call.getCallbackId().equals(callbackId)) {
+                return;
             }
+            clearStoppedWatchCall(call);
+            call.reject(message, code);
             releaseServiceConnection();
             serviceConnectionFuture = null;
+            serviceStartedFuture = null;
         }
 
         @Override
@@ -966,6 +1109,10 @@ public class BackgroundGeolocation extends Plugin {
     }
 
     private CompletableFuture<BackgroundGeolocationService.LocalBinder> getServiceConnection() {
+        return getServiceConnection(createServiceIntent());
+    }
+
+    private CompletableFuture<BackgroundGeolocationService.LocalBinder> getServiceConnection(Intent serviceIntent) {
         if (serviceConnectionFuture != null && !serviceConnectionFuture.isCompletedExceptionally()) {
             return serviceConnectionFuture;
         }
@@ -973,7 +1120,6 @@ public class BackgroundGeolocation extends Plugin {
         CompletableFuture<BackgroundGeolocationService.LocalBinder> connectionFuture = new CompletableFuture<>();
         serviceConnectionFuture = connectionFuture;
 
-        Intent serviceIntent = createServiceIntent();
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 this.getContext().startForegroundService(serviceIntent);
@@ -1027,6 +1173,135 @@ public class BackgroundGeolocation extends Plugin {
 
     private void stopBackgroundService() {
         getContext().stopService(createServiceIntent());
+    }
+
+    // The foreground service and SQLite session can outlive this WebView.
+    private void stopOrphanedNativeDelivery(PluginCall call, String resetSessionId) {
+        CompletableFuture<Void> pending = orphanNativeDeliveryStopFuture;
+        if (pending != null && !pending.isDone()) {
+            pending.whenComplete((ignored, failure) -> {
+                if (failure != null) {
+                    rejectTrackingStop(call, failure);
+                } else {
+                    resolveTrackingStop(call, resetSessionId);
+                }
+            });
+            return;
+        }
+
+        Context context = getContext();
+        PersistentTrackStore store = PersistentTrackStore.getInstance(context);
+        PersistentTrackStore.Session active;
+        try {
+            active = store.getActiveSession();
+            if (!LocationStore.isEnabled(context) && active == null) {
+                resolveTrackingStop(call, resetSessionId);
+                return;
+            }
+            // Prevent a sticky restart while locating the running service.
+            if (!LocationStore.clear(context)) {
+                throw new PersistentTrackStore.StoreException("PERSISTENCE_ERROR", "Could not clear sticky restart configuration");
+            }
+        } catch (PersistentTrackStore.StoreException exception) {
+            rejectStoreException(call, exception);
+            return;
+        }
+
+        PluginCall watchCallAtStop = watchCall;
+        CompletableFuture<Void> stopPending = new CompletableFuture<>();
+        orphanNativeDeliveryStopFuture = stopPending;
+        stopPending.whenComplete((ignored, failure) -> {
+            orphanNativeDeliveryStopFuture = null;
+            if (failure != null) {
+                stopBackgroundService();
+                rejectTrackingStop(call, failure);
+            } else if (resetSessionId == null) {
+                resolveStopCall(call, watchCallAtStop);
+            } else {
+                clearStoppedWatchCall(watchCallAtStop);
+                resolveTrackingStop(call, resetSessionId);
+            }
+        });
+        ServiceConnection orphanConnection = new ServiceConnection() {
+            @Override
+            public void onServiceConnected(ComponentName name, IBinder binder) {
+                try {
+                    stopServiceTracking((BackgroundGeolocationService.LocalBinder) binder);
+                } catch (RuntimeException exception) {
+                    stopPending.completeExceptionally(exception);
+                    return;
+                } finally {
+                    unbindOrphanedConnection(this);
+                }
+                stopPending.complete(null);
+            }
+
+            @Override
+            public void onServiceDisconnected(ComponentName name) {}
+        };
+
+        try {
+            if (!context.bindService(createServiceIntent(), orphanConnection, Context.BIND_AUTO_CREATE)) {
+                unbindOrphanedConnection(orphanConnection);
+                stopBackgroundService();
+                if (active != null) {
+                    store.stopSession(active.sessionId, System.currentTimeMillis());
+                }
+                stopPending.complete(null);
+            }
+        } catch (RuntimeException | PersistentTrackStore.StoreException exception) {
+            unbindOrphanedConnection(orphanConnection);
+            stopPending.completeExceptionally(exception);
+        }
+    }
+
+    private void unbindOrphanedConnection(ServiceConnection connection) {
+        try {
+            getContext().unbindService(connection);
+        } catch (IllegalArgumentException ignored) {
+            // Connection was not registered.
+        }
+    }
+
+    private void stopServiceTracking(BackgroundGeolocationService.LocalBinder service) {
+        try {
+            releaseLocationCallback(service.stop());
+        } catch (PersistentTrackStore.StoreException exception) {
+            throw new CompletionException(exception);
+        }
+    }
+
+    private void resolveStopCall(PluginCall call, PluginCall watchCallAtStop) {
+        clearStoppedWatchCall(watchCallAtStop);
+        call.resolve();
+    }
+
+    private void clearStoppedWatchCall(PluginCall watchCallAtStop) {
+        if (watchCall != null && watchCall == watchCallAtStop) {
+            watchCall.setKeepAlive(false);
+            watchCall = null;
+        }
+    }
+
+    private void resolveTrackingStop(PluginCall call, String resetSessionId) {
+        if (resetSessionId == null) {
+            call.resolve();
+            return;
+        }
+        try {
+            resolvePersistentTrackReset(call, PersistentTrackStore.getInstance(getContext()), resetSessionId);
+        } catch (PersistentTrackStore.StoreException exception) {
+            rejectStoreException(call, exception);
+        }
+    }
+
+    private void rejectTrackingStop(PluginCall call, Throwable failure) {
+        Throwable cause = unwrapThrowable(failure);
+        if (cause instanceof PersistentTrackStore.StoreException) {
+            rejectStoreException(call, (PersistentTrackStore.StoreException) cause);
+        } else {
+            call.reject("Service connection failed: " + cause.getMessage(), toException(cause));
+        }
     }
 
     private void releaseServiceConnection() {

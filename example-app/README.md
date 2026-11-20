@@ -58,7 +58,7 @@ The local timeline shows what reached JavaScript. The native queue is the indepe
 
 Do not use Android **Force stop** as a recovery test: the OS intentionally prevents an app from restarting after force-stop until the user launches it again.
 
-## Android baseline — 2026-09-14
+## Android baseline on the original Capgo release (2026-09-14)
 
 Device: Samsung SM-S928B, Android 16 / API 36.
 
@@ -82,7 +82,7 @@ Observed result:
 
 This closes the process-alive Android background baseline for the tested device. It does not cover reboot, force-stop, or offline durability. Those scenarios remain acceptance tests for the native persistent queue.
 
-## Android persistent queue validation — 2026-09-14
+## Android persistent queue validation (2026-09-14)
 
 Device: Samsung SM-S928B, Android 16 / API 36.
 
@@ -93,8 +93,12 @@ Device: Samsung SM-S928B, Android 16 / API 36.
 - with `maxPoints: 2`, two points were retained and the third location attempt produced one callback error, removed the foreground notification, and stopped delivery;
 - direct SQLite inspection confirmed `state=overflowed`, `lastSequence=2`, `queuedPointCount=2`, `droppedPointCount=1`, and `errorCode=QUEUE_FULL` without deleting the two retained points.
 
-These results close the Android process-restart, reattach, explicit-stop, and overflow gates on this device. Reboot, explicit Android force-stop semantics, offline storage pressure, and the iOS implementation remain open.
+These results cover process restart, reattachment, explicit stop and overflow on the original Android build. Repeat the scenarios when validating an upgrade.
 
-## iOS handoff
+## iOS build and test
 
-The checked-in `Info.plist` includes both location usage descriptions and the `location` background mode. On macOS, sync and open the example project as documented in the SGDMS phone-track spike plan, then verify signing before running on a real iPhone.
+The harness has supported the iOS queue since `v8.4.5-adworks.2`. The checked-in `Info.plist` includes both location usage descriptions, the `location` background mode and the scene lifecycle for Capacitor 8.5.
+
+Run `bun run example:build` from the plugin root. From `example-app`, run `bunx cap sync ios` and open the SwiftPM Xcode project with `bunx cap open ios`. Verify signing before installing on an iPhone.
+
+For a persistence upgrade test, start a background track on the previous build and leave points unacknowledged. Install the new build over it and verify that the same session and points can be read and acknowledged. For foreground-service and background-location behaviour, repeat the test with the screen locked on a physical device.

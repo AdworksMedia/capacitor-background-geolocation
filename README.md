@@ -1,50 +1,85 @@
 # Background Geolocation
-<a href="https://capgo.app/"><img src="https://capgo.app/readme-banner.svg?repo=Cap-go/capacitor-background-geolocation" alt="Capgo - Instant updates for Capacitor" /></a>
+
+Track precise location in the background and monitor native geofences on iOS and Android. Built for delivery, fitness and field service apps that keep tracking when the screen is off.
+
+<a href="https://capgo.app/?ref=plugin_background_geolocation"><img src="https://capgo.app/readme-banner.svg?repo=Cap-go/capacitor-background-geolocation" alt="Capgo - Build Capacitor apps with AI, ship updates instantly" /></a>
 
 <div align="center">
-  <h2><a href="https://capgo.app/?ref=plugin_background_geolocation"> ➡️ Get Instant updates for your App with Capgo</a></h2>
-  <h2><a href="https://capgo.app/consulting/?ref=plugin_background_geolocation"> Missing a feature? We’ll build the plugin for you 💪</a></h2>
+  <p><b>Capgo</b>: push fixes to your Capacitor users in minutes, build signed iOS and Android apps without a Mac, and roll back in one click.</p>
+  <h2><a href="https://capgo.app/register/?ref=plugin_background_geolocation">➡️ Get started for free</a></h2>
+  <p>14-day unlimited free trial. No credit card required</p>
 </div>
 
-A Capacitor plugin for accurate background location tracking and native geofencing on iOS and Android.
-Use it to stream precise location updates, monitor circular geofence regions, react to enter/exit events in JavaScript, and POST geofence transitions natively while the WebView is suspended.
+> 🤖 **Building with an AI coding agent?** Install [Capgo skills](https://capgo.app/skills/?ref=plugin_background_geolocation) so Claude Code, Codex, Cursor, Copilot, or Gemini CLI know how to install and use `@capgo/background-geolocation` in your Capacitor app: `npx skills add Cap-go/capgo-skills`. Then ask your agent: *"Add @capgo/background-geolocation to my Capacitor app and wire it up."* [Agent setup guides](https://capgo.app/agents/?ref=plugin_background_geolocation) · [Hosted MCP](https://capgo.app/docs/ai/mcp/?ref=plugin_background_geolocation)
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Cap-go/capacitor-background-geolocation/main/assets/github-social-preview.png" alt="@capgo/background-geolocation for Capacitor apps" width="300" />
+</p>
 
 ## Adworks fork status
 
-This fork is based on Capgo `8.4.5` and adds an opt-in, native SQLite track queue for applications that cannot depend on the Capacitor WebView being alive when a location is received.
+This fork is based on Capgo `8.6.5` and adds an opt-in, native SQLite track queue for applications that cannot depend on the Capacitor WebView being alive when a location is received.
 
 | Item | Status |
 | --- | --- |
-| Current validated tag | `v8.4.5-adworks.2` |
-| Android persistent queue | Implemented and validated on a physical device |
-| iOS persistent queue | Implemented and validated on a physical device |
+| Upstream baseline | `8.6.5` |
+| Adworks tag for this baseline | `v8.6.5-adworks.1` |
+| Previous physical-device baseline | `v8.4.5-adworks.2` |
+| Adworks persistent queue | Android and iOS |
 | Web persistent queue | Unsupported by design |
 | Existing Capgo modes | Unchanged when `persistentTrack` is omitted |
 | Distribution | Git tag; not published to npm |
 
 The native queue commits every accepted point before delivering it to JavaScript or the optional native URL. Reads are non-destructive, acknowledgements are explicit and idempotent, and queue overflow or storage failure stops tracking instead of silently losing earlier points. See [Native Track Queue Design](docs/native-track-queue-design.md) for the complete contract, lifecycle guarantees, platform limits, and validation record.
 
-Install the validated version by pinning the immutable Git tag in `package.json`:
+The Adworks mode uses its existing database, session IDs, ordered points and acknowledgement API. Leave Capgo’s optional `locationLog` off when you only need the session queue. Capgo’s file and SQLite logs retain a rolling history. The Adworks queue preserves unacknowledged points and stops with `QUEUE_FULL` when the next point would exceed the configured capacity. On iOS, the Adworks queue links system SQLite in both CocoaPods and SwiftPM.
+
+Install this version by pinning the immutable Git tag in `package.json`:
 
 ```json
 {
   "dependencies": {
-    "@capgo/background-geolocation": "git+https://github.com/AdworksMedia/capacitor-background-geolocation.git#v8.4.5-adworks.2"
+    "@capgo/background-geolocation": "git+https://github.com/AdworksMedia/capacitor-background-geolocation.git#v8.6.5-adworks.1"
   }
 }
 ```
 
-Then install dependencies and synchronize the native projects:
+Install dependencies and synchronize the native projects.
 
 ```sh
 bun install
 bunx cap sync
 ```
 
+The Git tag contains the native sources used by Capacitor. To use the compiled JavaScript API from this fork, run `bun install --frozen-lockfile && bun run build` in a checkout of the tag, then package that build with `bun pm pack`.
+
+## Built and maintained with AI
+
+We build, improve and fix our plugins with heavy use of AI, so issues usually get fixed in under a day and pull requests get feedback the same day. A human still reviews, tests and merges 50+ pull requests daily.
+
+- Most plugin issues get a fix pull request the same day, often within a couple of hours, and are usually resolved in one to two days.
+- Every pull request goes through our AI review system, usually within minutes.
+- Our AI pre-checks tests, code review, conventions and security, then a human reviews, tests and merges.
+- A human, Martin, reviews, tests and merges 50+ pull requests every day.
+- In the last 90 days, 95% of plugin issues were resolved.
+
+[Learn more about how we build with AI](https://capgo.app/docs/plugins/ai-engineering/)
+
+## Key features
+
+- **Background tracking**: `start()` streams location updates with options such as `distanceFilter` and a background notification message, `stop()` ends them.
+- **Native uploads**: send locations to your `url` from native code, and change headers on the fly with `updateHeaders()`.
+- **Geofencing**: `addGeofence()`, `removeGeofence()`, `removeAllGeofences()` and `getMonitoredGeofences()`, with `geofenceTransition` and `geofenceError` events.
+- **Route guidance**: `setPlannedRoute()` plays a sound when the user leaves a planned route.
+- **Permissions**: `checkPermissions()`, `requestPermissions()` and `openSettings()`.
+- **Platforms**: iOS and Android. iOS uses Core Location, Android uses Google Play services location with a foreground service.
+
+A Capacitor plugin for accurate background location tracking and native geofencing on iOS and Android.
+Use it to stream precise location updates, monitor circular geofence regions, react to enter/exit events in JavaScript, and POST geofence transitions natively while the WebView is suspended.
+
 ## Features
 
 - Accurate foreground and background geolocation without a paid license.
-- Opt-in native SQLite track queue with ordered, recoverable points on Android and iOS.
 - Native geofencing on iOS and Android for circular regions.
 - Enter and exit events through `geofenceTransition` while the app is alive.
 - Native webhook delivery for geofence transitions when the WebView is suspended.
@@ -62,7 +97,7 @@ So I created a fork and started maintaining it [here](https://github.com/HaylLtd
 It served me well for over half a decade, but I felt it was hard to maintain due to all its history, features, and bug fixes.  
 I also felt like there was a barrier to introducing new features because of its complexity.
 
-So I started exploring what it would take to reduce that complexity—at the same time, I was envious of how small [`@capacitor-community/background-geolocation`](https://github.com/capacitor-community/background-geolocation) is.  
+So I started exploring what it would take to reduce that complexity, at the same time, I was envious of how small [`@capacitor-community/background-geolocation`](https://github.com/capacitor-community/background-geolocation) is.
 I took the best of both worlds: tried to reduce the codebase in the original Cordova plugin and add some robustness to the Capacitor plugin.  
 
 That's how I ended up maintaining this one.  
@@ -128,110 +163,6 @@ BackgroundGeolocation.start(
 BackgroundGeolocation.setPlannedRoute({soundFile: "assets/myFile.mp3", route: [[1,2], [3,4]], distance: 30 });
 ```
 
-## Persistent native track queue
-
-Use `persistentTrack` when the host application must recover every point already accepted by native code after its WebView is suspended, recreated, or unavailable. The host application owns the session identifier and the import into its own database.
-
-### Start or reattach a session
-
-```typescript
-import { BackgroundGeolocation } from '@capgo/background-geolocation';
-
-const sessionId = crypto.randomUUID();
-
-await BackgroundGeolocation.start(
-  {
-    backgroundTitle: 'Location tracking',
-    backgroundMessage: 'The application is recording your route.',
-    requestPermissions: false,
-    stale: false,
-    distanceFilter: 2,
-    minIntervalMs: 5000,
-    persistentTrack: {
-      sessionId,
-      maxPoints: 100000,
-    },
-  },
-  (location, error) => {
-    if (error) {
-      console.error(error);
-      return;
-    }
-
-    // Useful for live UI only. Import from the native queue for durability.
-    console.log(location);
-  },
-);
-```
-
-Generate a stable, unique `sessionId` and persist it in the host application. Calling `start()` again with the same active ID reattaches the current bridge without creating a second session. Starting another ID while one is active fails with `ACTIVE_SESSION_EXISTS`.
-
-The application should present its own prominent disclosure before requesting system location permissions and must provide the platform declarations required for background location. Set `requestPermissions` according to that permission flow; the example uses `false` because the host application handles permissions before starting the track.
-
-### Recover after launch or resume
-
-```typescript
-const { session } = await BackgroundGeolocation.getActivePersistentTrackSession();
-
-if (session) {
-  // Restore the application-owned context for session.sessionId, then call
-  // start() with the same options and session ID when tracking should continue.
-  console.log('Recoverable track:', session.sessionId, session.state);
-}
-```
-
-An `active` session represents recoverable tracking intent, not a guarantee that the operating system is currently running the process. Android can restore the configured foreground service after normal process recreation. An Android force-stop and an iOS user force-quit are operating-system stop boundaries; after the next manual launch, query the persisted session and reattach when appropriate.
-
-### Import, commit, then acknowledge
-
-```typescript
-let afterSequence: number | undefined;
-
-for (;;) {
-  const page = await BackgroundGeolocation.getPersistentTrackPoints({
-    sessionId,
-    afterSequence,
-    limit: 1000,
-  });
-
-  if (page.points.length === 0 || page.nextAfterSequence === null) {
-    break;
-  }
-
-  // This must be idempotent and transactional in the host application.
-  await persistPointsInHostDatabase(page.points);
-
-  // Acknowledge only after the host transaction commits successfully.
-  await BackgroundGeolocation.acknowledgePersistentTrackPoints({
-    sessionId,
-    throughSequence: page.nextAfterSequence,
-  });
-
-  afterSequence = page.nextAfterSequence;
-  if (!page.hasMore) {
-    break;
-  }
-}
-```
-
-Reads never delete points. Acknowledgement removes points through the supplied sequence and is safe to repeat. If the process stops after the host transaction commits but before acknowledgement, the same points will be returned again, so the host import must deduplicate by session ID and sequence.
-
-### Stop, inspect, and reset
-
-```typescript
-await BackgroundGeolocation.stop();
-
-const { session } = await BackgroundGeolocation.getPersistentTrackSession({ sessionId });
-console.log(session?.state, session?.queuedPointCount);
-
-// Call only after all required points have been imported or intentionally discarded.
-await BackgroundGeolocation.resetPersistentTrackSession({ sessionId });
-```
-
-`stop()` closes the native write boundary and marks the session `stopped`, but it does not delete queued points. A session can be `active`, `stopped`, `overflowed`, or `failed`. `resetPersistentTrackSession()` is the explicit destructive cleanup operation for one named session; there is intentionally no unscoped reset-all API.
-
-Persistent mode is available only on Android and iOS. The Web implementation rejects persistent queue operations instead of emulating guarantees that a browser cannot provide.
-
 ## Native geofencing
 
 Use native geofencing when you need lightweight location boundaries such as stores, job sites, delivery zones, campuses, or check-in areas. The plugin monitors geofences natively and emits JavaScript events while the app is active. Android background delivery is optional and only requested when you opt in.
@@ -279,6 +210,27 @@ await BackgroundGeolocation.setupGeofencing({
 });
 ```
 
+### iOS geofence transitions with the app closed
+
+iOS relaunches a terminated app in the background to deliver a region crossing, but Capacitor only creates its plugins once a view controller has loaded its view. In a scene-based app that happens when a scene connects, which a background relaunch may never do, so a crossing delivered to a location manager owned by the plugin is lost. The plugin therefore keeps the location manager that monitors geofences in `GeofenceRelay`, a singleton that lives outside the plugin, and the app starts it from its app delegate:
+
+```swift
+#if canImport(CapgoBackgroundGeolocationPlugin)
+import CapgoBackgroundGeolocationPlugin // Swift Package Manager
+#else
+import CapgoBackgroundGeolocation // CocoaPods
+#endif
+
+func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+    GeofenceRelay.shared.start()
+    return true
+}
+```
+
+With that call in place, when iOS relaunches the app for a crossing, the crossing is built from the persisted geofence setup, POSTed to `url` with `headers`, and kept on disk for `geofenceTransition` listeners until the WebView loads, even if iOS ends that background launch first. iOS relaunches the app for this only with Always location access. In one test on an iPhone with iOS 26.6 the relaunch also happened with Background App Refresh turned off for the app, but Apple does not document this, so test it for your app. Without the call, crossings are still delivered while the app is running or suspended, as before.
+
+Transitions are queued on disk and sent in order, again on the next launch, crossing, network return, return to the foreground, or `updateHeaders()` call. A POST that fails for lack of network, with a 5xx, a 408 or a 429, or with a 401 or 403 stays queued; any other response removes it. The queue keeps the newest 100 transitions, none older than seven days, and is emptied when `url` changes or `clearGeofenceQueue()` is called; call it when the user signs out, since queued transitions go out with the headers in place when they are sent. Each transition carries `time`, when the phone detected the crossing, since a queued POST can arrive much later. On Android, WorkManager retries every POST that does not get a 2xx response.
+
 ```javascript
 // If you just want the current location, try something like this. The longer
 // the timeout, the more accurate the guess will be. I wouldn't go below about 100ms.
@@ -300,6 +252,48 @@ function guessLocation(callback, timeout) {
     });
 }
 ```
+
+## Location log
+
+The callback only runs while the WebView does, and a location POSTed to `url` is dropped when its request fails. With `locationLog` on, every location is also added to a file on the device. It's written from native code, so it records for as long as tracking runs, and it survives app restarts and reboots.
+
+```javascript
+await BackgroundGeolocation.start(
+    {
+        backgroundMessage: "Sharing your location.",
+        locationLog: true
+    },
+    (location, error) => console.log(location, error)
+);
+
+// Later, when the app returns to the foreground or the network is back
+const { entries } = await BackgroundGeolocation.getLocationLog();
+if (entries.length > 0) {
+    // Use the entries, for example upload them, then remove the ones that were read
+    await BackgroundGeolocation.clearLocationLog({ upToId: entries[entries.length - 1].id });
+}
+```
+
+Each entry is a `Location` with an `id`. The ids only go up, so clearing with `upToId` never removes a location that arrived after the read. The log holds up to `locationLogMaxEntries` locations, and `limit` and `afterId` read it in pages. It's left out of device backups, so on a restored device it starts empty and the ids start again at 1.
+
+### Optional SQLite location log
+
+The default build stores the Capgo log in a rolling file. To opt in to the SQLite backend (POST status per entry, same model as the original PR #92), set this in `capacitor.config` and run `npx cap sync`:
+
+```typescript
+plugins: {
+  BackgroundGeolocation: {
+    locationLogSqlite: true
+  }
+}
+```
+
+Then pass `locationLogSqlite: true` in `start()` together with `locationLog: true`. If you request `locationLogSqlite` without enabling it in `capacitor.config`, `start()` rejects with a clear error.
+
+On iOS, `bunx cap sync` toggles the optional `ios/SqliteLocationLog` sources in both CocoaPods and SwiftPM. The Adworks queue links system SQLite in both configurations. On Android, sync sets `backgroundGeolocation.locationLogSqlite.include` in `android/gradle.properties`.
+
+At capacity, the file log removes the oldest tenth. The SQLite log trims by ID after each insert, keeping the most recent window of IDs. The Adworks queue applies its own per-session capacity and acknowledgement policy.
+
 
 ## Documentation
 
@@ -428,6 +422,7 @@ Configuration specific to Android can be made in `strings.xml`:
 * [`acknowledgePersistentTrackPoints(...)`](#acknowledgepersistenttrackpoints)
 * [`resetPersistentTrackSession(...)`](#resetpersistenttracksession)
 * [`updateHeaders(...)`](#updateheaders)
+* [`clearGeofenceQueue()`](#cleargeofencequeue)
 * [`openSettings()`](#opensettings)
 * [`setPlannedRoute(...)`](#setplannedroute)
 * [`setupGeofencing(...)`](#setupgeofencing)
@@ -435,6 +430,8 @@ Configuration specific to Android can be made in `strings.xml`:
 * [`removeGeofence(...)`](#removegeofence)
 * [`removeAllGeofences()`](#removeallgeofences)
 * [`getMonitoredGeofences()`](#getmonitoredgeofences)
+* [`getLocationLog(...)`](#getlocationlog)
+* [`clearLocationLog(...)`](#clearlocationlog)
 * [`addListener('geofenceTransition', ...)`](#addlistenergeofencetransition-)
 * [`addListener('geofenceError', ...)`](#addlistenergeofenceerror-)
 * [`checkPermissions()`](#checkpermissions)
@@ -612,6 +609,26 @@ those features have a configured `url`.
 --------------------
 
 
+### clearGeofenceQueue()
+
+```typescript
+clearGeofenceQueue() => Promise<void>
+```
+
+Drops geofence transitions queued for a native POST and not yet sent.
+
+Queued transitions go out with the `headers` in place when they are sent,
+so call this when the user signs out, or before another account's
+credentials are given to {@link BackgroundGeolocationPlugin.updateHeaders}
+or {@link BackgroundGeolocationPlugin.setupGeofencing}. The queue is also
+emptied when `setupGeofencing` is given a different `url`. On web there is
+no queue and this resolves at once.
+
+**Since:** 8.6.0
+
+--------------------
+
+
 ### openSettings()
 
 ```typescript
@@ -727,6 +744,45 @@ Lists the geofence identifiers currently monitored by this plugin.
 --------------------
 
 
+### getLocationLog(...)
+
+```typescript
+getLocationLog(options?: GetLocationLogOptions | undefined) => Promise<LocationLogResult>
+```
+
+Reads the locations kept by {@link <a href="#startoptions">StartOptions.locationLog</a>}, whether or
+not tracking is running. Nothing is kept on the web, so the result is
+empty there.
+
+| Param         | Type                                                                    | Description                      |
+| ------------- | ----------------------------------------------------------------------- | -------------------------------- |
+| **`options`** | <code><a href="#getlocationlogoptions">GetLocationLogOptions</a></code> | Paging for the entries to return |
+
+**Returns:** <code>Promise&lt;<a href="#locationlogresult">LocationLogResult</a>&gt;</code>
+
+**Since:** 8.5.0
+
+--------------------
+
+
+### clearLocationLog(...)
+
+```typescript
+clearLocationLog(options?: ClearLocationLogOptions | undefined) => Promise<void>
+```
+
+Removes entries from the location log, for example once they have been
+read or uploaded.
+
+| Param         | Type                                                                        | Description             |
+| ------------- | --------------------------------------------------------------------------- | ----------------------- |
+| **`options`** | <code><a href="#clearlocationlogoptions">ClearLocationLogOptions</a></code> | Which entries to remove |
+
+**Since:** 8.5.0
+
+--------------------
+
+
 ### addListener('geofenceTransition', ...)
 
 ```typescript
@@ -831,18 +887,21 @@ Get the native Capacitor plugin version
 
 The options for configuring for location updates.
 
-| Prop                     | Type                                                                      | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Default                            | Since           |
-| ------------------------ | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- | --------------- |
-| **`backgroundMessage`**  | <code>string</code>                                                       | If the "backgroundMessage" option is defined, the plugin will provide location updates whether the app is in the background or the foreground. If it is not defined, location updates are only guaranteed in the foreground. This is true on both platforms. On Android, a notification must be shown to continue receiving location updates in the background. This option specifies the text of that notification.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |                                    | 7.0.9           |
-| **`backgroundTitle`**    | <code>string</code>                                                       | The title of the notification mentioned above.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | <code>"Using your location"</code> | 7.0.9           |
-| **`requestPermissions`** | <code>boolean</code>                                                      | Whether permissions should be requested from the user automatically, if they are not already granted.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | <code>true</code>                  | 7.0.9           |
-| **`stale`**              | <code>boolean</code>                                                      | If "true", stale locations may be delivered while the device obtains a GPS fix. You are responsible for checking the "time" property. If "false", locations are guaranteed to be up to date.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | <code>false</code>                 | 7.0.9           |
-| **`distanceFilter`**     | <code>number</code>                                                       | The distance in meters that the device must move before a new location update is triggered. This is used to filter out small movements and reduce the number of updates. A non-zero value suppresses updates while the device is stationary (for example a parked vehicle). Use {@link <a href="#startoptions">StartOptions.minIntervalMs</a>} when you need a lower update rate but still want periodic points without movement.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | <code>0</code>                     | 7.0.9           |
-| **`url`**                | <code>string</code>                                                       | When set, each location update is additionally delivered by POSTing it as JSON to this URL directly from native code, in parallel with the JavaScript callback. The request body matches the <a href="#location">`Location`</a> object, plus an extra `"source": "native"` field so the server can tell native POSTs apart from updates forwarded by the JavaScript layer. Native delivery does not depend on the WebView. On Android, the foreground service is kept alive and restarted by the system (`START_STICKY`), so location POSTs continue even after the user swipes the app away from the recents list and its process is killed. On iOS, locations are POSTed natively for as long as the system keeps the app running; iOS itself stops location updates when the user terminates the app (an OS restriction — iOS has no equivalent of Android's restartable foreground service). Delivery is best-effort: there is no on-disk queue and no automatic retry. Failed POSTs are logged and dropped. A flaky network can delay in-flight requests, but points are not persisted across process death. |                                    | 8.2.0           |
-| **`headers`**            | <code><a href="#record">Record</a>&lt;string, string&gt;</code>           | Extra HTTP headers for the native POST described by {@link <a href="#startoptions">StartOptions.url</a>}. Ignored when `url` is not set. On Android these headers are persisted next to `url` so a sticky service restart can keep authenticating. Prefer a narrowly scoped, long-lived token for this path, or call {@link BackgroundGeolocationPlugin.updateHeaders} when credentials rotate. On iOS location headers stay in memory for the tracking session.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |                                    | 8.3.3           |
-| **`minIntervalMs`**      | <code>number</code>                                                       | Minimum interval between native location POSTs, in milliseconds. `0` or unset keeps the current behaviour (every provider update). Applied as the Android `requestLocationUpdates` interval (advisory) and as a hard gate immediately before each native POST on both platforms. A point older than the last one sent still passes through (late update, not a faster one). Note: a non-zero {@link <a href="#startoptions">StartOptions.distanceFilter</a>} suppresses updates while the device is stationary, so it cannot substitute for a time interval when you still need periodic parked-vehicle heartbeats.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | <code>0</code>                     | 8.3.3           |
-| **`networkFallback`**    | <code>boolean</code>                                                      | Android only - has no effect on iOS. Whether to fall back to `NETWORK_PROVIDER` (cell/Wi-Fi based location) when `GPS_PROVIDER` has not delivered a fix recently. GPS can go quiet for extended periods when the app is backgrounded, the screen is locked, or the device has weak sky visibility (indoors, dense urban areas); the network fallback fills those gaps with a coarser, but far more reliably delivered, fix. GPS always takes priority: a network fix is only used once GPS has been silent for 20+ seconds, and is dropped if its reported accuracy is worse than 300m or unreported. Defaults to `false`, so existing GPS-only accuracy characteristics are unchanged unless you opt in.                                                                                                                                                                                                                                                                                                                                                                                                         | <code>false</code>                 | 8.5.0           |
-| **`persistentTrack`**    | <code><a href="#persistenttrackoptions">PersistentTrackOptions</a></code> | Enables native SQLite persistence for this tracking session. A point is committed before it is emitted to JavaScript or submitted to {@link <a href="#startoptions">StartOptions.url</a>}. The Adworks prerelease implements this mode on Android and iOS. Web runtimes are unsupported.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |                                    | 8.4.5-adworks.1 |
+| Prop                        | Type                                                                      | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Default                            | Since           |
+| --------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- | --------------- |
+| **`backgroundMessage`**     | <code>string</code>                                                       | If the "backgroundMessage" option is defined, the plugin will provide location updates whether the app is in the background or the foreground. If it is not defined, location updates are only guaranteed in the foreground. This is true on both platforms. On Android, a notification must be shown to continue receiving location updates in the background. This option specifies the text of that notification.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |                                    | 7.0.9           |
+| **`backgroundTitle`**       | <code>string</code>                                                       | The title of the notification mentioned above.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | <code>"Using your location"</code> | 7.0.9           |
+| **`requestPermissions`**    | <code>boolean</code>                                                      | Whether permissions should be requested from the user automatically, if they are not already granted.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | <code>true</code>                  | 7.0.9           |
+| **`stale`**                 | <code>boolean</code>                                                      | If "true", stale locations may be delivered while the device obtains a GPS fix. You are responsible for checking the "time" property. If "false", locations are guaranteed to be up to date.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | <code>false</code>                 | 7.0.9           |
+| **`distanceFilter`**        | <code>number</code>                                                       | The distance in meters that the device must move before a new location update is triggered. This is used to filter out small movements and reduce the number of updates. A non-zero value suppresses updates while the device is stationary (for example a parked vehicle). Use {@link <a href="#startoptions">StartOptions.minIntervalMs</a>} when you need a lower update rate but still want periodic points without movement.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | <code>0</code>                     | 7.0.9           |
+| **`url`**                   | <code>string</code>                                                       | When set, each location update is additionally delivered by POSTing it as JSON to this URL directly from native code, in parallel with the JavaScript callback. The request body matches the <a href="#location">`Location`</a> object, plus an extra `"source": "native"` field so the server can tell native POSTs apart from updates forwarded by the JavaScript layer. Native delivery does not depend on the WebView. On Android, the foreground service is kept alive and restarted by the system (`START_STICKY`), so location POSTs continue even after the user swipes the app away from the recents list and its process is killed. On iOS, locations are POSTed natively for as long as the system keeps the app running; iOS itself stops location updates when the user terminates the app (an OS restriction — iOS has no equivalent of Android's restartable foreground service). Delivery is best-effort: there is no on-disk queue and no automatic retry. Failed POSTs are logged and dropped. A flaky network can delay in-flight requests, but points are not persisted across process death. Set {@link <a href="#startoptions">StartOptions.locationLog</a>} to keep every location on the device. |                                    | 8.2.0           |
+| **`headers`**               | <code><a href="#record">Record</a>&lt;string, string&gt;</code>           | Extra HTTP headers for the native POST described by {@link <a href="#startoptions">StartOptions.url</a>}. Ignored when `url` is not set. On Android these headers are persisted next to `url` so a sticky service restart can keep authenticating. Prefer a narrowly scoped, long-lived token for this path, or call {@link BackgroundGeolocationPlugin.updateHeaders} when credentials rotate. On iOS location headers stay in memory for the tracking session.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |                                    | 8.3.3           |
+| **`minIntervalMs`**         | <code>number</code>                                                       | Minimum interval between native location POSTs, in milliseconds. `0` or unset keeps the current behaviour (every provider update). Applied as the Android `requestLocationUpdates` interval (advisory) and as a hard gate immediately before each native POST on both platforms. A point older than the last one sent still passes through (late update, not a faster one). Note: a non-zero {@link <a href="#startoptions">StartOptions.distanceFilter</a>} suppresses updates while the device is stationary, so it cannot substitute for a time interval when you still need periodic parked-vehicle heartbeats.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | <code>0</code>                     | 8.3.3           |
+| **`networkFallback`**       | <code>boolean</code>                                                      | Android only - has no effect on iOS. Whether to fall back to `NETWORK_PROVIDER` (cell/Wi-Fi based location) when `GPS_PROVIDER` has not delivered a fix recently. GPS can go quiet for extended periods when the app is backgrounded, the screen is locked, or the device has weak sky visibility (indoors, dense urban areas); the network fallback fills those gaps with a coarser, but far more reliably delivered, fix. GPS always takes priority: a network fix is only used once GPS has been silent for 20+ seconds, and is dropped if its reported accuracy is worse than 300m or unreported. Defaults to `false`, so existing GPS-only accuracy characteristics are unchanged unless you opt in.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | <code>false</code>                 | 8.5.0           |
+| **`persistentTrack`**       | <code><a href="#persistenttrackoptions">PersistentTrackOptions</a></code> | Enables native SQLite persistence for this tracking session. A point is committed before it is emitted to JavaScript or submitted to {@link <a href="#startoptions">StartOptions.url</a>}. This mode is available on Android and iOS. Web runtimes are unsupported.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |                                    | 8.4.5-adworks.1 |
+| **`locationLog`**           | <code>boolean</code>                                                      | Whether every location is also added to a log file on the device. The file is written from native code, so it keeps recording while the WebView is suspended, and it survives `stop()`, app restarts and reboots. It is left out of device backups. Read it with {@link BackgroundGeolocationPlugin.getLocationLog}. Tracking, and the log with it, ends when the app is closed, except on Android with {@link <a href="#startoptions">StartOptions.url</a>} set.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | <code>false</code>                 | 8.5.0           |
+| **`locationLogMaxEntries`** | <code>number</code>                                                       | How many locations the location log holds. Once it is full, the file log removes the oldest tenth, and the SQLite log keeps the most recent IDs.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | <code>100000</code>                | 8.5.0           |
+| **`locationLogSqlite`**     | <code>boolean</code>                                                      | Use the optional SQLite location log backend instead of the default file log. Requires `plugins.BackgroundGeolocation.locationLogSqlite: true` in `capacitor.config` and `npx cap sync` so native SQLite code is included.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | <code>false</code>                 | 8.5.0           |
 
 
 #### PersistentTrackOptions
@@ -1009,15 +1068,15 @@ When `url` is provided, native code can send a JSON `POST` whenever a
 monitored region is entered or exited. Android background POST delivery
 requires `backgroundLocation: true`.
 
-| Prop                     | Type                                                             | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Default            | Since  |
-| ------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ | ------ |
-| **`url`**                | <code>string</code>                                              | Endpoint that receives geofence transition payloads. On Android, native background POST delivery requires `backgroundLocation: true`. Delivery is best-effort: there is no on-disk queue and no automatic retry. Failed POSTs are logged and dropped.                                                                                                                                                                                                                                                                                                                                                                          |                    | 8.0.30 |
-| **`headers`**            | <code><a href="#record">Record</a>&lt;string, string&gt;</code>  | Extra HTTP headers for the native POST described by {@link <a href="#geofencesetupoptions">GeofenceSetupOptions.url</a>}. Ignored when `url` is not set. Headers are persisted with the geofence setup so transitions that fire after process restart can still authenticate. Prefer a narrowly scoped token, or call {@link BackgroundGeolocationPlugin.updateHeaders} when credentials rotate.                                                                                                                                                                                                                               |                    | 8.3.3  |
-| **`notifyOnEntry`**      | <code>boolean</code>                                             | Whether entry transitions should be monitored.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | <code>true</code>  | 8.0.30 |
-| **`notifyOnExit`**       | <code>boolean</code>                                             | Whether exit transitions should be monitored.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | <code>true</code>  | 8.0.30 |
-| **`payload`**            | <code><a href="#record">Record</a>&lt;string, unknown&gt;</code> | Base JSON payload merged into every native transition POST and listener event.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |                    | 8.0.30 |
-| **`requestPermissions`** | <code>boolean</code>                                             | Whether the plugin should request the native location permission needed for geofencing. iOS geofencing needs Always location authorization. Android geofencing requests foreground location by default. Android background location is only requested when `backgroundLocation` is enabled.                                                                                                                                                                                                                                                                                                                                    | <code>true</code>  | 8.0.30 |
-| **`backgroundLocation`** | <code>boolean</code>                                             | Whether Android geofencing should opt into background location permission. The plugin does not add `ACCESS_BACKGROUND_LOCATION` to your app manifest. Leave this disabled if your app does not have Google Play approval for Android background location. Enable it only after adding `ACCESS_BACKGROUND_LOCATION` to your app manifest and when you need Android geofence transitions while the app is in the background. This option only affects Android. Android versions below 10 do not request an extra background-location runtime permission, but the option still gates native Android background geofence delivery. | <code>false</code> | 8.0.34 |
+| Prop                     | Type                                                             | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Default            | Since  |
+| ------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ------ |
+| **`url`**                | <code>string</code>                                              | Endpoint that receives geofence transition payloads. On Android, native background POST delivery requires `backgroundLocation: true`. WorkManager retries every POST that does not get a 2xx response. On iOS, transitions are posted by native code whether or not the WebView is running, including when iOS relaunches a terminated app for a region crossing, provided the app calls `GeofenceRelay.shared.start()` from its app delegate (see the README). Each transition is queued on disk and sent in order. A POST that fails for lack of network, with a 5xx, a 408 or a 429, or with a 401 or 403 (a lapsed token that {@link BackgroundGeolocationPlugin.updateHeaders} can replace) is retried; any other response removes it from the queue. The queue keeps the newest 100 transitions, none older than seven days, and is emptied when `url` changes or {@link BackgroundGeolocationPlugin.clearGeofenceQueue} is called. Android drops queued transitions in the same two cases. |                    | 8.0.30 |
+| **`headers`**            | <code><a href="#record">Record</a>&lt;string, string&gt;</code>  | Extra HTTP headers for the native POST described by {@link <a href="#geofencesetupoptions">GeofenceSetupOptions.url</a>}. Ignored when `url` is not set. Headers are persisted with the geofence setup so transitions that fire after process restart can still authenticate. Prefer a narrowly scoped token, or call {@link BackgroundGeolocationPlugin.updateHeaders} when credentials rotate.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |                    | 8.3.3  |
+| **`notifyOnEntry`**      | <code>boolean</code>                                             | Whether entry transitions should be monitored.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | <code>true</code>  | 8.0.30 |
+| **`notifyOnExit`**       | <code>boolean</code>                                             | Whether exit transitions should be monitored.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | <code>true</code>  | 8.0.30 |
+| **`payload`**            | <code><a href="#record">Record</a>&lt;string, unknown&gt;</code> | Base JSON payload merged into every native transition POST and listener event.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |                    | 8.0.30 |
+| **`requestPermissions`** | <code>boolean</code>                                             | Whether the plugin should request the native location permission needed for geofencing. iOS geofencing needs Always location authorization. Android geofencing requests foreground location by default. Android background location is only requested when `backgroundLocation` is enabled.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | <code>true</code>  | 8.0.30 |
+| **`backgroundLocation`** | <code>boolean</code>                                             | Whether Android geofencing should opt into background location permission. The plugin does not add `ACCESS_BACKGROUND_LOCATION` to your app manifest. Leave this disabled if your app does not have Google Play approval for Android background location. Enable it only after adding `ACCESS_BACKGROUND_LOCATION` to your app manifest and when you need Android geofence transitions while the app is in the background. This option only affects Android. Android versions below 10 do not request an extra background-location runtime permission, but the option still gates native Android background geofence delivery.                                                                                                                                                                                                                                                                                                                                                                    | <code>false</code> | 8.0.34 |
 
 
 #### AddGeofenceOptions
@@ -1053,6 +1112,46 @@ Result returned when listing monitored geofences.
 | **`regions`** | <code>string[]</code> | Identifiers for all geofences currently monitored by this plugin. | 8.0.30 |
 
 
+#### LocationLogResult
+
+Result returned by {@link BackgroundGeolocationPlugin.getLocationLog}.
+
+| Prop          | Type                            | Description                | Since |
+| ------------- | ------------------------------- | -------------------------- | ----- |
+| **`entries`** | <code>LocationLogEntry[]</code> | The entries, oldest first. | 8.5.0 |
+
+
+#### LocationLogEntry
+
+A location kept in the location log.
+
+| Prop             | Type                                         | Description                                                                                                                                                                                                                                                                                      | Since |
+| ---------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----- |
+| **`id`**         | <code>number</code>                          | Identifier of the entry. Identifiers increase with every location and are never reused, so the last one read works as a cursor for {@link <a href="#getlocationlogoptions">GetLocationLogOptions.afterId</a>} and {@link <a href="#clearlocationlogoptions">ClearLocationLogOptions.upToId</a>}. | 8.5.0 |
+| **`status`**     | <code>'failed' \| 'pending' \| 'sent'</code> | Delivery status when using the SQLite location log backend.                                                                                                                                                                                                                                      | 8.5.0 |
+| **`httpStatus`** | <code>number \| null</code>                  | HTTP status from the native POST when `status` is `sent` or `failed`.                                                                                                                                                                                                                            | 8.5.0 |
+| **`error`**      | <code>string \| null</code>                  | Error message when `status` is `failed`.                                                                                                                                                                                                                                                         | 8.5.0 |
+
+
+#### GetLocationLogOptions
+
+Options for {@link BackgroundGeolocationPlugin.getLocationLog}.
+
+| Prop          | Type                | Description                                                                                                                      | Default           | Since |
+| ------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ----- |
+| **`afterId`** | <code>number</code> | Only return entries with an `id` greater than this one.                                                                          |                   | 8.5.0 |
+| **`limit`**   | <code>number</code> | Maximum number of entries to return, up to 10000. Call again with `afterId` set to the last `id` received to read the next page. | <code>1000</code> | 8.5.0 |
+
+
+#### ClearLocationLogOptions
+
+Options for {@link BackgroundGeolocationPlugin.clearLocationLog}.
+
+| Prop         | Type                | Description                                                                                               | Since |
+| ------------ | ------------------- | --------------------------------------------------------------------------------------------------------- | ----- |
+| **`upToId`** | <code>number</code> | Only remove entries with an `id` up to and including this one. Every entry is removed when it is not set. | 8.5.0 |
+
+
 #### PluginListenerHandle
 
 | Prop         | Type                                      |
@@ -1066,15 +1165,16 @@ Event emitted when a monitored geofence is entered or exited.
 
 The same data is also sent to the configured `url`, when one is set.
 
-| Prop             | Type                                                             | Description                                                           | Since  |
-| ---------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------- | ------ |
-| **`identifier`** | <code>string</code>                                              | Identifier of the geofence that changed state.                        | 8.0.30 |
-| **`transition`** | <code>'enter' \| 'exit'</code>                                   | Transition name.                                                      | 8.0.30 |
-| **`enter`**      | <code>boolean</code>                                             | `true` for entry transitions, `false` for exit transitions.           | 8.0.30 |
-| **`latitude`**   | <code>number</code>                                              | Latitude in degrees for the monitored region center, when available.  | 8.0.30 |
-| **`longitude`**  | <code>number</code>                                              | Longitude in degrees for the monitored region center, when available. | 8.0.30 |
-| **`radius`**     | <code>number</code>                                              | Region radius in meters, when available.                              | 8.0.30 |
-| **`payload`**    | <code><a href="#record">Record</a>&lt;string, unknown&gt;</code> | Merged setup and region payload.                                      | 8.0.30 |
+| Prop             | Type                                                             | Description                                                                                                                                                                                                                                                                                                                                                                                                                                         | Since  |
+| ---------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| **`identifier`** | <code>string</code>                                              | Identifier of the geofence that changed state.                                                                                                                                                                                                                                                                                                                                                                                                      | 8.0.30 |
+| **`transition`** | <code>'enter' \| 'exit'</code>                                   | Transition name.                                                                                                                                                                                                                                                                                                                                                                                                                                    | 8.0.30 |
+| **`enter`**      | <code>boolean</code>                                             | `true` for entry transitions, `false` for exit transitions.                                                                                                                                                                                                                                                                                                                                                                                         | 8.0.30 |
+| **`latitude`**   | <code>number</code>                                              | Latitude in degrees for the monitored region center, when available.                                                                                                                                                                                                                                                                                                                                                                                | 8.0.30 |
+| **`longitude`**  | <code>number</code>                                              | Longitude in degrees for the monitored region center, when available.                                                                                                                                                                                                                                                                                                                                                                               | 8.0.30 |
+| **`radius`**     | <code>number</code>                                              | Region radius in meters, when available.                                                                                                                                                                                                                                                                                                                                                                                                            | 8.0.30 |
+| **`payload`**    | <code><a href="#record">Record</a>&lt;string, unknown&gt;</code> | Merged setup and region payload.                                                                                                                                                                                                                                                                                                                                                                                                                    | 8.0.30 |
+| **`time`**       | <code>number</code>                                              | When the phone detected the transition, in milliseconds since the epoch. On Android, the time of the location fix that triggered it; on iOS, when iOS delivered the region event, which can follow the crossing by seconds or minutes; on web, the time of the position that crossed. A transition POSTed natively can be sent well after this, once the network or the app comes back, so the receiver should read this rather than its own clock. | 8.6.0  |
 
 
 #### GeofenceErrorEvent
@@ -1122,7 +1222,9 @@ Options for {@link BackgroundGeolocationPlugin.requestPermissions}.
 
 Construct a type with a set of properties K of type T
 
-<code>{ [P in K]: T; }</code>
+<code>{
+ [P in K]: T;
+ }</code>
 
 
 #### PersistentTrackSessionState

@@ -18,6 +18,7 @@ import type {
   PersistentTrackPointsResult,
   AcknowledgePersistentTrackPointsResult,
   ResetPersistentTrackSessionResult,
+  LocationLogResult,
 } from './definitions';
 
 interface WebGeofence {
@@ -90,7 +91,7 @@ export class BackgroundGeolocationWeb extends WebPlugin implements BackgroundGeo
           }
           this.isOffRoute = offRoute;
         }
-        this.checkGeofences(position.coords.latitude, position.coords.longitude);
+        this.checkGeofences(position.coords.latitude, position.coords.longitude, position.timestamp);
         callback(location);
       },
       (error) => {
@@ -174,6 +175,11 @@ export class BackgroundGeolocationWeb extends WebPlugin implements BackgroundGeo
     this.geofenceHeaders = { ...(options.headers ?? {}) };
   }
 
+  /** Resolves at once: the web implementation POSTs each transition immediately, with no queue. */
+  async clearGeofenceQueue(): Promise<void> {
+    return;
+  }
+
   async addGeofence(options: AddGeofenceOptions): Promise<void> {
     if (!navigator.geolocation) {
       throw new Error('Geolocation is not supported by this browser');
@@ -206,6 +212,14 @@ export class BackgroundGeolocationWeb extends WebPlugin implements BackgroundGeo
 
   async getMonitoredGeofences(): Promise<MonitoredGeofencesResult> {
     return { regions: Array.from(this.geofences.keys()) };
+  }
+
+  async getLocationLog(): Promise<LocationLogResult> {
+    return { entries: [] };
+  }
+
+  async clearLocationLog(): Promise<void> {
+    return;
   }
 
   async checkPermissions(): Promise<BackgroundGeolocationPermissionStatus> {
@@ -258,7 +272,7 @@ export class BackgroundGeolocationWeb extends WebPlugin implements BackgroundGeo
       return;
     }
     this.geofenceWatchId = navigator.geolocation.watchPosition(
-      (position) => this.checkGeofences(position.coords.latitude, position.coords.longitude),
+      (position) => this.checkGeofences(position.coords.latitude, position.coords.longitude, position.timestamp),
       () => undefined,
       {
         enableHighAccuracy: false,
@@ -276,7 +290,7 @@ export class BackgroundGeolocationWeb extends WebPlugin implements BackgroundGeo
     this.geofenceWatchId = undefined;
   }
 
-  private checkGeofences(latitude: number, longitude: number): void {
+  private checkGeofences(latitude: number, longitude: number, time: number): void {
     const point: [number, number] = [longitude, latitude];
     this.geofences.forEach((geofence) => {
       const distance = this.haversine(point, [geofence.longitude, geofence.latitude]);
@@ -285,14 +299,14 @@ export class BackgroundGeolocationWeb extends WebPlugin implements BackgroundGeo
       geofence.inside = inside;
 
       if (inside && previousInside !== true && geofence.notifyOnEntry) {
-        this.emitGeofenceTransition(geofence, true);
+        this.emitGeofenceTransition(geofence, true, time);
       } else if (!inside && previousInside === true && geofence.notifyOnExit) {
-        this.emitGeofenceTransition(geofence, false);
+        this.emitGeofenceTransition(geofence, false, time);
       }
     });
   }
 
-  private emitGeofenceTransition(geofence: WebGeofence, enter: boolean): void {
+  private emitGeofenceTransition(geofence: WebGeofence, enter: boolean, time: number): void {
     const payload = {
       ...this.geofencePayload,
       ...(geofence.payload ?? {}),
@@ -306,6 +320,7 @@ export class BackgroundGeolocationWeb extends WebPlugin implements BackgroundGeo
       longitude: geofence.longitude,
       radius: geofence.radius,
       payload,
+      time,
     };
     void this.notifyListeners('geofenceTransition', event);
     if (this.geofenceUrl) {

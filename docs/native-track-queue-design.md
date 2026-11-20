@@ -2,13 +2,15 @@
 
 ## Status and scope
 
-This document fixes the cross-platform contract for the opt-in persistent track queue developed on `feature/native-track-queue`. The queue is generic plugin functionality; it contains no SGDMS schema, credentials, endpoints, or `GISElements` logic.
+This document describes the cross-platform contract for the Adworks persistent track queue. The queue is generic plugin functionality; it contains no SGDMS schema, credentials, endpoints, or `GISElements` logic.
 
 Existing `start()` consumers remain unchanged. Native persistence is enabled only when `persistentTrack` is present in `StartOptions`.
 
-The first Adworks prerelease established the Android implementation and shared contract. Version `8.4.5-adworks.2` adds the matching iOS implementation using the system SQLite library.
+The first Adworks release established the Android queue. Tag `v8.4.5-adworks.2` added the iOS implementation. Tag `v8.6.5-adworks.1` merges Capgo `8.6.5` and keeps the native queue API, database filename, schema and session IDs. Existing sessions and points remain available after app upgrade.
 
-Physical-device validation on an iPhone 14 running iOS 26.6.1 confirmed foreground collection, continued queue growth in background with the screen locked, recovery and reattachment after force-quit and manual relaunch, and the complete stop/read/acknowledge/reset flow. An explicit iOS force-quit remains a platform stop boundary; the plugin preserves the active session and already committed points for recovery but does not promise continued collection while the application is force-quit.
+Capgo’s optional `locationLog` is a rolling history. It uses its own storage and has its own limit and read/clear API. Enable `persistentTrack` for session-scoped reads, acknowledgements and `QUEUE_FULL`. Set `locationLog` separately if you also need the Capgo history. On iOS, `cap sync` toggles only the optional Capgo SQLite log sources. The Adworks queue links SQLite with either setting.
+
+Physical-device validation of `v8.4.5-adworks.2` on an iPhone 14 running iOS 26.6.1 confirmed foreground collection, continued queue growth in background with the screen locked, recovery and reattachment after force-quit and manual relaunch, and the complete stop/read/acknowledge/reset flow. An explicit iOS force-quit remains a platform stop boundary; the plugin preserves the active session and already committed points for recovery but does not promise continued collection while the application is force-quit.
 
 The queue owns a private SQLite database inside the host application's sandbox. It never opens the host application's primary database.
 
@@ -26,7 +28,7 @@ The queue owns a private SQLite database inside the host application's sandbox. 
 
 ## Public API
 
-The authoritative declarations and generated API documentation will live in `src/definitions.ts`.
+The authoritative declarations and generated API documentation come from `src/definitions.ts`.
 
 ### Start option
 
@@ -183,7 +185,7 @@ For a persistent session, native stop performs this ordered sequence:
 6. remove the Android foreground service or iOS background indicator;
 7. release the JavaScript callback and resolve the stop call.
 
-Calling stop when no watcher is attached remains idempotent. If an active persisted session exists after plugin recreation, stop still finalizes that session.
+Calling stop when no watcher is attached remains idempotent. On Android, stop waits for an in-progress start. If an active persisted session exists after plugin recreation, stop still finalizes it and leaves its points available for import.
 
 ## SQLite schema
 
@@ -268,7 +270,7 @@ Persistent-track mode is native-only. The web implementation rejects `start({ pe
 
 ## Cross-platform production validation gates
 
-Before the fork receives a cross-platform production tag:
+Before adopting a new fork tag in a production app:
 
 1. schema creation and migration tests pass on Android and iOS;
 2. insert order, nullable fields, pagination, acknowledgement, reset, and session discovery have native tests;
@@ -278,3 +280,5 @@ Before the fork receives a cross-platform production tag:
 6. iPhone tests cover background, lock screen, relaunch where permitted, stop, reset, and documented force-quit behaviour;
 7. the example harness reads and acknowledges pages only after the native implementations are stable;
 8. SGDMS integration acknowledges through a sequence only after its own SQLite transaction commits.
+
+For upgrades, install the new app over the previous version while an active session still has unacknowledged points. Relaunch, resume the same session ID, read and acknowledge the remaining points, then stop. Check for loss and duplicate sequences on both platforms.

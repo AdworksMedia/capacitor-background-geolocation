@@ -38,7 +38,7 @@ func formatLocation(_ location: CLLocation) -> PluginCallResultData {
 @objc(BackgroundGeolocation)
 // swiftlint:disable:next type_body_length
 public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBridgedPlugin {
-    private let pluginVersion: String = "8.4.5"
+    private let pluginVersion: String = "8.6.5"
     public let identifier = "BackgroundGeolocationPlugin"
     public let jsName = "BackgroundGeolocation"
     public let pluginMethods: [CAPPluginMethod] = [
@@ -51,6 +51,8 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
         CAPPluginMethod(name: "removeGeofence", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "removeAllGeofences", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getMonitoredGeofences", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getLocationLog", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "clearLocationLog", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "checkPermissions", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "requestPermissions", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getActivePersistentTrackSession", returnType: CAPPluginReturnPromise),
@@ -60,6 +62,7 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
         CAPPluginMethod(name: "acknowledgePersistentTrackPoints", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "resetPersistentTrackSession", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "updateHeaders", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "clearGeofenceQueue", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getPluginVersion", returnType: CAPPluginReturnPromise)
     ]
     private var locationManager: CLLocationManager?
@@ -82,7 +85,6 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
     private var pendingPermissionRequestTimeout: DispatchWorkItem?
     private var pendingGeofenceAddCalls: [String: CAPPluginCall] = [:]
     private var pendingGeofenceRegions: [String: (region: CLCircularRegion, payload: [String: Any])] = [:]
-    private var lastGeofenceTransition: [String: String] = [:]
     // When set (via the "url" start option), each valid location is also POSTed
     // as JSON directly from native code, independently of the WebView.
     private var locationBackendUrl: URL?
@@ -94,13 +96,16 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
     private lazy var persistentTrackStoreResult: Result<PersistentTrackStore, Error> = Result {
         try PersistentTrackStore(databaseURL: PersistentTrackStore.defaultDatabaseURL())
     }
+    private var locationLogEnabled: Bool = false
+    private var locationLogMaxEntries: Int = LocationLog.defaultMaxEntries
+    private var locationLogSqliteEnabled: Bool = false
 
-    private let geofenceUrlKey = "CapgoBackgroundGeolocation.geofence.url"
-    private let geofenceHeadersKey = "CapgoBackgroundGeolocation.geofence.headers"
+    private let geofenceUrlKey = GeofenceRelay.urlKey
+    private let geofenceHeadersKey = GeofenceRelay.headersKey
     private let geofenceNotifyOnEntryKey = "CapgoBackgroundGeolocation.geofence.notifyOnEntry"
     private let geofenceNotifyOnExitKey = "CapgoBackgroundGeolocation.geofence.notifyOnExit"
-    private let geofencePayloadKey = "CapgoBackgroundGeolocation.geofence.payload"
-    private let geofenceRegionPrefix = "CapgoBackgroundGeolocation.geofence.region."
+    private let geofencePayloadKey = GeofenceRelay.payloadKey
+    private let geofenceRegionPrefix = GeofenceRelay.regionPrefix
 
     // Earth radius in meters for distance calculations
     private static let earthRadiusMeters: Double = 6371000.0
@@ -137,6 +142,25 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
             self.locationHeaders = self.stringHeaders(from: call.getObject("headers"))
             self.minIntervalMs = max(0, call.getDouble("minIntervalMs") ?? 0)
             self.lastPostedLocationTime = nil
+            self.locationLogEnabled = call.getBool("locationLog") ?? false
+            self.locationLogMaxEntries = max(1, call.getInt("locationLogMaxEntries") ?? LocationLog.defaultMaxEntries)
+            let sqliteRequested = call.getBool("locationLogSqlite") ?? false
+            #if !BGGEO_LOCATION_LOG_SQLITE
+            if sqliteRequested {
+                self.clearLocationRunState()
+                return call.reject(
+                    "SQLite location log is disabled. Set plugins.BackgroundGeolocation.locationLogSqlite to true in capacitor.config and run npx cap sync."
+                )
+            }
+            self.locationLogSqliteEnabled = false
+            #else
+            self.locationLogSqliteEnabled = sqliteRequested
+            LocationLogPreferences.setLocationLogSqlite(sqliteRequested)
+            #endif
+            LocationLog.resetShared()
+            if self.locationLogEnabled && self.locationLogSqliteEnabled {
+                LocationLog.shared.open()
+            }
 
             do {
                 if let persistentOptions = call.getObject("persistentTrack") {
@@ -423,6 +447,8 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
         minIntervalMs = 0
         lastPostedLocationTime = nil
         persistentSessionId = nil
+        locationLogEnabled = false
+        locationLogSqliteEnabled = false
 
         if let callbackId = activeCallbackId {
             if let savedCall = bridge?.savedCall(withID: callbackId) {
@@ -456,6 +482,15 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
             self.locationHeaders = headers
             self.geofenceHeaders = headers
             self.persistGeofenceConfiguration()
+            GeofenceRelay.shared.flush()
+            call.resolve()
+        }
+    }
+
+    /// Drops geofence transitions queued for a native POST, for sign-out or an account switch.
+    @objc func clearGeofenceQueue(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            GeofenceRelay.shared.clearQueue()
             call.resolve()
         }
     }
@@ -571,6 +606,10 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
                 return call.reject("Payload must be valid JSON")
             }
 
+            // Transitions queued for another endpoint are not sent to this one.
+            if backendUrl != self.geofenceBackendUrl {
+                GeofenceRelay.shared.clearQueue()
+            }
             self.geofenceBackendUrl = backendUrl
             self.geofenceHeaders = self.stringHeaders(from: call.getObject("headers"))
             self.geofenceNotifyOnEntry = call.getBool("notifyOnEntry") ?? true
@@ -656,7 +695,7 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
                     "CANCELLED"
                 )
                 self.removePersistedGeofenceRegion(identifier)
-                self.lastGeofenceTransition.removeValue(forKey: identifier)
+                GeofenceRelay.shared.forget(identifier)
                 return call.resolve()
             }
             guard self.persistedGeofenceRegionIds().contains(identifier) else {
@@ -666,14 +705,14 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
                 self.pendingGeofenceAddCalls.removeValue(forKey: identifier)?.reject("Geofence was removed before monitoring started", "CANCELLED")
                 self.pendingGeofenceRegions.removeValue(forKey: identifier)
                 self.removePersistedGeofenceRegion(identifier)
-                self.lastGeofenceTransition.removeValue(forKey: identifier)
+                GeofenceRelay.shared.forget(identifier)
                 return call.resolve()
             }
             manager.stopMonitoring(for: region)
             self.pendingGeofenceAddCalls.removeValue(forKey: identifier)?.reject("Geofence was removed before monitoring started", "CANCELLED")
             self.pendingGeofenceRegions.removeValue(forKey: identifier)
             self.removePersistedGeofenceRegion(identifier)
-            self.lastGeofenceTransition.removeValue(forKey: identifier)
+            GeofenceRelay.shared.forget(identifier)
             call.resolve()
         }
     }
@@ -687,7 +726,7 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
             }
             for identifier in identifiers {
                 self.removePersistedGeofenceRegion(identifier)
-                self.lastGeofenceTransition.removeValue(forKey: identifier)
+                GeofenceRelay.shared.forget(identifier)
             }
             for (_, pendingCall) in self.pendingGeofenceAddCalls {
                 pendingCall.reject("Geofences were removed before monitoring started", "CANCELLED")
@@ -709,13 +748,55 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
         }
     }
 
+    @objc func getLocationLog(_ call: CAPPluginCall) {
+        guard isWholeNumberOrAbsent(call, "afterId") else {
+            return call.reject("afterId must be a number")
+        }
+        let afterId = wholeInt64(from: call, key: "afterId") ?? 0
+        let limit = min(LocationLog.maxLimit, max(1, call.getInt("limit") ?? LocationLog.defaultLimit))
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                call.resolve(["entries": try LocationLog.shared.entries(afterId: afterId, limit: limit)])
+            } catch {
+                call.reject("Could not read the location log", nil, error)
+            }
+        }
+    }
+
+    @objc func clearLocationLog(_ call: CAPPluginCall) {
+        guard isWholeNumberOrAbsent(call, "upToId") else {
+            return call.reject("upToId must be a number")
+        }
+        let upToId = wholeInt64(from: call, key: "upToId")
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try LocationLog.shared.clear(upToId: upToId)
+                call.resolve()
+            } catch {
+                call.reject("Could not clear the location log", nil, error)
+            }
+        }
+    }
+
+    private func isWholeNumberOrAbsent(_ call: CAPPluginCall, _ key: String) -> Bool {
+        guard call.options[key] != nil else { return true }
+        guard let value = call.getDouble(key) else { return false }
+        return Int64(exactly: value.rounded()) != nil
+    }
+
+    private func wholeInt64(from call: CAPPluginCall, key: String) -> Int64? {
+        guard call.options[key] != nil else { return nil }
+        guard let value = call.getDouble(key) else { return nil }
+        return Int64(exactly: value.rounded())
+    }
+
     private func ensureGeofenceLocationManager() -> CLLocationManager {
         if let manager = geofenceLocationManager {
             return manager
         }
-        let manager = CLLocationManager()
-        manager.delegate = self
-        manager.pausesLocationUpdatesAutomatically = false
+        // The relay owns the location manager that monitors geofences, so
+        // transitions reach native code even before a plugin is created.
+        let manager = GeofenceRelay.shared.attach(self)
         geofenceLocationManager = manager
         return manager
     }
@@ -796,59 +877,10 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
         })
     }
 
-    private func geofenceTransitionData(for region: CLRegion, enter: Bool) -> [String: Any] {
-        let persistedRegion = persistedGeofenceRegion(region.identifier)
-        let regionPayload = persistedRegion["payload"] as? [String: Any] ?? [:]
-        var payload = geofencePayload
-        for (key, value) in regionPayload {
-            payload[key] = value
-        }
-
-        var data = payload
-        data["identifier"] = region.identifier
-        data["transition"] = enter ? "enter" : "exit"
-        data["enter"] = enter
-        if let circularRegion = region as? CLCircularRegion {
-            data["latitude"] = circularRegion.center.latitude
-            data["longitude"] = circularRegion.center.longitude
-            data["radius"] = circularRegion.radius
-        } else {
-            data["latitude"] = persistedRegion["latitude"]
-            data["longitude"] = persistedRegion["longitude"]
-            data["radius"] = persistedRegion["radius"]
-        }
-        data["payload"] = payload
-        return data
-    }
-
-    private func handleGeofenceTransition(for region: CLRegion, enter: Bool) {
-        if let circularRegion = region as? CLCircularRegion {
-            if enter && !circularRegion.notifyOnEntry {
-                return
-            }
-            if !enter && !circularRegion.notifyOnExit {
-                return
-            }
-        }
-
-        let transition = enter ? "enter" : "exit"
-        if lastGeofenceTransition[region.identifier] == transition {
-            return
-        }
-        lastGeofenceTransition[region.identifier] = transition
-
-        let data = geofenceTransitionData(for: region, enter: enter)
+    // Transitions are built, queued and POSTed by GeofenceRelay; the plugin
+    // only passes them on to JavaScript.
+    func relayGeofenceTransition(_ data: [String: Any]) {
         notifyListeners("geofenceTransition", data: data, retainUntilConsumed: true)
-        postGeofenceTransition(data)
-    }
-
-    private func postGeofenceTransition(_ data: [String: Any]) {
-        guard let backendUrl = geofenceBackendUrl,
-              JSONSerialization.isValidJSONObject(data),
-              let body = try? JSONSerialization.data(withJSONObject: data) else {
-            return
-        }
-        postJson(body, to: backendUrl, headers: geofenceHeaders, taskName: "CapgoGeofenceTransition")
     }
 
     // Like formatLocation, but safe for JSONSerialization: the bridge's
@@ -909,8 +941,14 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
               let body = try? JSONSerialization.data(withJSONObject: data) else {
             return
         }
+        let logId: Int64?
+        if locationLogEnabled && locationLogSqliteEnabled && LocationLog.shared.tracksPostOutcomes {
+            logId = LocationLog.shared.insert(data, maxEntries: locationLogMaxEntries)
+        } else {
+            logId = nil
+        }
         lastPostedLocationTime = location.timestamp
-        postJson(body, to: backendUrl, headers: locationHeaders, taskName: "CapgoLocationUpdate")
+        postJson(body, to: backendUrl, headers: locationHeaders, taskName: "CapgoLocationUpdate", logId: logId)
     }
 
     private func stringHeaders(from object: [String: Any]?) -> [String: String] {
@@ -928,7 +966,13 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
         return headers
     }
 
-    private func postJson(_ body: Data, to url: URL, headers: [String: String], taskName: String) {
+    private func postJson(
+        _ body: Data,
+        to url: URL,
+        headers: [String: String],
+        taskName: String,
+        logId: Int64? = nil
+    ) {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -945,7 +989,11 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
                 backgroundTask = .invalid
             }
         }
-        URLSession.shared.dataTask(with: request) { _, _, _ in
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            if let logId {
+                let status = (response as? HTTPURLResponse)?.statusCode
+                LocationLog.shared.complete(id: logId, httpStatus: status, error: error)
+            }
             if backgroundTask != .invalid {
                 UIApplication.shared.endBackgroundTask(backgroundTask)
                 backgroundTask = .invalid
@@ -1146,6 +1194,15 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
             }
         }
 
+        if locationLogEnabled {
+            let skipAppend = locationLogSqliteEnabled && locationBackendUrl != nil
+            if !skipAppend {
+                var entry = locationPayload(location)
+                entry["source"] = nil
+                LocationLog.shared.append(entry, maxEntries: locationLogMaxEntries)
+            }
+        }
+
         // Native delivery does not depend on the bridge, so it keeps working
         // even if the WebView is gone.
         postLocation(location)
@@ -1217,23 +1274,6 @@ public class BackgroundGeolocation: CAPPlugin, CLLocationManagerDelegate, CAPBri
             ],
             retainUntilConsumed: true
         )
-    }
-
-    public func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
-        guard manager === geofenceLocationManager, region is CLCircularRegion else { return }
-        handleGeofenceTransition(for: region, enter: true)
-    }
-
-    public func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
-        guard manager === geofenceLocationManager, region is CLCircularRegion else { return }
-        handleGeofenceTransition(for: region, enter: false)
-    }
-
-    public func locationManager(_ manager: CLLocationManager, didDetermineState state: CLRegionState, for region: CLRegion) {
-        guard manager === geofenceLocationManager, region is CLCircularRegion else { return }
-        if state == .inside {
-            handleGeofenceTransition(for: region, enter: true)
-        }
     }
 
     @objc override public func checkPermissions(_ call: CAPPluginCall) {
